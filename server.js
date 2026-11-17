@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI } from '@google/genai';
@@ -57,7 +58,8 @@ if (!config.bridgeToken) {
 }
 
 const bridgeStore = new BridgeStore(config.bridgeToken);
-const inAppBrowser = new InAppBrowserManager(path.join(__dirname, 'profiles'));
+const defaultProfilesRoot = process.env.PROFILES_DIR || path.join(os.homedir(), '.muse-boardroom', 'profiles');
+const inAppBrowser = new InAppBrowserManager(defaultProfilesRoot);
 
 let messages = loadJson(MESSAGES_FILE, [
   {
@@ -1113,13 +1115,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Muse Boardroom active on http://0.0.0.0:${PORT}`);
-  if (!findChromiumExecutable(inAppBrowser.profilesRoot)) {
-    console.log('In-App Browser binary not pre-installed on this host; provisioning Chrome Headless Shell in background...');
-    inAppBrowser
-      .warmupBrowser()
-      .then((exe) => console.log(`In-App Browser ready: ${exe}`))
-      .catch((err) => console.warn(`In-App Browser auto-provisioning skipped: ${err.message}`));
-  }
 });
 
 async function shutdownGracefully() {
