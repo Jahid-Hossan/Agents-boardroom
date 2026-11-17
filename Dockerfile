@@ -17,14 +17,17 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies cleanly
+# Install production dependencies
 RUN npm install --omit=dev
 
 # Copy application files
 COPY . .
 
+# Prepare persistent-storage startup script
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Expose web port
 EXPOSE 3000
 
-# Start server
-CMD ["node", "server.js"]
+# Start with persistent storage initialization
+CMD ["/app/docker-entrypoint.sh"]
