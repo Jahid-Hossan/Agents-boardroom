@@ -72,13 +72,13 @@ docker build -t muse-boardroom .
 docker run -d \
   -p 3000:3000 \
   -e GEMINI_API_KEY="your-key-here" \
-  -e PROFILES_DIR="/app/profiles" \
-  -v $(pwd)/profiles:/app/profiles \
+  -e DATA_DIR="/app/data" \
+  -v $(pwd)/boardroom-data:/app/data \
   --name muse-boardroom \
   muse-boardroom
 ```
 
-- **Coolify**: Connect your GitHub repo, set Build Pack to **Dockerfile**, expose port `3000`, add a persistent volume for `/app/profiles` (with `PROFILES_DIR=/app/profiles`), and add `GEMINI_API_KEY` in Environment Variables. See `COOLIFY_GUIDE.md` for details.
+- **Coolify**: Connect your GitHub repo and use the included **Docker Compose** file. It creates one persistent named volume at `/app/data` for config, chat history, uploads, and Chromium profiles. Add `GEMINI_API_KEY` in Coolify Environment Variables. See `COOLIFY_GUIDE.md` for details.
 - **Railway / Render**: Connect your GitHub repo — both platforms auto-detect the `Dockerfile` and support persistent disks for `/app/profiles`.
 
 ---
