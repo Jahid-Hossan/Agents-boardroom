@@ -1,26 +1,41 @@
-# 🚀 Coolify Deployment Guide (কুলাইফাই দিয়ে ভিপিএস-এ ডিপ্লয়মেন্ট)
+# Coolify Deployment Guide
 
-আপনার ভিপিএস-এ **Coolify** থাকা মানে আপনার কাজ এখন সবচেয়ে সহজ! Coolify স্বয়ংক্রিয়ভাবে ডকার কন্টেইনার, ফ্রি এসএসএল (HTTPS) এবং অটোমেটিক রিস্টার্ট হ্যান্ডেল করে।
+This repository is configured for Docker Compose deployment on Coolify.
 
----
+## 1. Create the application
 
-### ধাপ ১: প্রজেক্টটি GitHub-এ পুশ করুন (অথবা ভিপিএস-এ রাখুন)
-এই `muse-ceo-command` ফোল্ডারটিতে আমরা ইতোমধ্যে [Dockerfile](file:///C:/Users/Jahid/.gemini/antigravity/scratch/muse-ceo-command/Dockerfile) এবং [docker-compose.yml](file:///C:/Users/Jahid/.gemini/antigravity/scratch/muse-ceo-command/docker-compose.yml) প্রস্তুত করে দিয়েছি।
-এটি আপনার GitHub-এ একটি প্রাইভেট রিপোজিটরি হিসেবে পুশ করুন।
+1. In Coolify, open the target Project and Environment.
+2. Create an Application from the GitHub repository `Jahid-Hossan/Agents-boardroom`.
+3. Select branch `main`.
+4. Set Build Pack to **Docker Compose**.
+5. Set Base Directory to `/` and Compose file to `/docker-compose.yml`.
+6. Click **Reload Compose** after changing the repository configuration so Coolify reads the current Compose file.
 
----
+## 2. Environment variables
 
-### ধাপ ২: Coolify ড্যাশবোর্ড থেকে ৩ ক্লিকে ডিপ্লয় করুন
-1. আপনার ব্রাউজারে Coolify ড্যাশবোর্ডে লগইন করুন।
-2. **Project** বা **Production Environment**-এ যান।
-3. **+ New Resource** বাটনে ক্লিক করুন -> নির্বাচন করুন **Application**।
-4. **Public/Private Repository** সিলেক্ট করে আপনার GitHub রিপোজিটরি লিংকটি দিন।
-5. Coolify স্বয়ংক্রিয়ভাবে ভেতরের `Dockerfile` ডিটেক্ট করে নেবে:
-   - **Port:** `3000`
-   - **Domain:** আপনার যেকোনো ডোমেন বা সাবডোমেন দিন (যেমন: `https://ceo.yourdomain.com`) অথবা ভিপিএস-এর র আইপি রাখুন। Coolify নিজে থেকেই ফ্রি **Let's Encrypt SSL (HTTPS)** সেট করে দেবে!
-6. **Deploy** বাটনে ক্লিক করুন!
+Set `GEMINI_API_KEY` in the application's Environment Variables. The Compose file passes it into the container. Keep the key in Coolify Secrets/Environment Variables; never commit it to GitHub.
 
----
+The application listens on port `3000`.
 
-### 🎉 ফলাফল
-কয়েক সেকেন্ডের ভেতর আপনার Muse AI CEO Command Center ভিপিএস-এ ২৪/৭ চালু হয়ে যাবে। আপনি আপনার ফোন থেকে যেকোনো সময় `https://ceo.yourdomain.com` লিংকে ঢুকে সিইও হিসেবে ৪টি অ্যাকাউন্ট পরিচালনা করতে পারবেন!
+## 3. Persistent data
+
+The Compose file declares the named volume `muse_boardroom_data` mounted at `/app/data`.
+
+The startup script initializes and stores:
+- `/app/data/config.json`
+- `/app/data/messages.json`
+- `/app/data/uploads/`
+- `/app/data/profiles/` (Chromium login profiles)
+
+Do not remove this volume when redeploying. Deleting the volume deletes the app's saved configuration, messages, uploaded files, and browser login profiles.
+
+## 4. Domain and deployment
+
+1. In the service's Domains/Public URL setting, add your chosen hostname with HTTPS, for example `https://boardroom.example.com`.
+2. Ensure that the hostname's DNS record points to the VPS and that the Coolify proxy can issue TLS certificates.
+3. Deploy the application.
+4. After deployment, open the domain and test the dashboard, Gemini API mode, and In-App Browser.
+
+## 5. Updating
+
+Push changes to the `main` branch and redeploy from Coolify. Keep the named volume attached to preserve runtime data.
