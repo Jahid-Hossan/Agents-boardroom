@@ -1,6 +1,13 @@
 // Muse Boardroom — Unified Multi-Agent & In-App Browser Connector Controller
 
-let appConfig = { companyName: 'Muse Boardroom', ceoName: 'You', accounts: [] };
+let appConfig = {
+  companyName: 'Muse Boardroom',
+  ceoName: 'You',
+  supervisorAgentId: null,
+  collaborationEnabled: true,
+  maxCollaborationHops: 3,
+  accounts: []
+};
 let bridgeState = { connected: false, clients: [], tabs: [], bridgeToken: '', serverUrl: '' };
 let inAppStatuses = {};
 let inAppEngineState = { ready: true, downloading: false };
@@ -48,7 +55,8 @@ const UI_ICONS = {
   plug: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
   shieldCheck: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
   externalLink: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
-  zap: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'
+  zap: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+  crown: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>'
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -213,12 +221,19 @@ async function copyInput(inputId, label) {
 }
 
 // Data Loading
+function getSupervisorAgent() {
+  return (appConfig.accounts || []).find((a) => a.id === appConfig.supervisorAgentId || a.isSupervisor) || null;
+}
+
 async function loadConfig() {
   try {
     const res = await fetch('/api/config');
     appConfig = await res.json();
     if (!Array.isArray(appConfig.accounts)) appConfig.accounts = [];
+    if (appConfig.collaborationEnabled === undefined) appConfig.collaborationEnabled = true;
+    if (!appConfig.maxCollaborationHops) appConfig.maxCollaborationHops = 3;
     renderHeaderMeta();
+    renderContextBanner();
     renderRoster();
     renderMentionChips();
     renderMessages();
@@ -551,8 +566,9 @@ function renderRoster() {
 
   appConfig.accounts.forEach((agent) => {
     const isActive = currentView === 'direct' && currentDirectAgentId === agent.id;
+    const isSup = Boolean(agent.isSupervisor || (appConfig.supervisorAgentId && appConfig.supervisorAgentId === agent.id));
     const card = document.createElement('div');
-    card.className = `agent-card ${isActive ? 'active' : ''}`;
+    card.className = `agent-card ${isActive ? 'active' : ''} ${isSup ? 'supervisor' : ''}`;
 
     const top = document.createElement('div');
     top.className = 'agent-card-top';
@@ -562,7 +578,16 @@ function renderRoster() {
 
     const title = document.createElement('div');
     title.className = 'agent-card-title';
-    title.textContent = agent.name;
+    const titleName = document.createElement('span');
+    titleName.textContent = agent.name;
+    title.appendChild(titleName);
+    if (isSup) {
+      const supBadge = document.createElement('span');
+      supBadge.className = 'supervisor-tag';
+      supBadge.innerHTML = `${UI_ICONS.crown}<span>CEO</span>`;
+      supBadge.title = 'Designated CEO / Supervisor';
+      title.appendChild(supBadge);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'agent-card-meta';
@@ -693,11 +718,33 @@ function insertMention(tag) {
   input.focus();
 }
 
+function renderContextBanner() {
+  const bannerText = document.getElementById('bannerText');
+  if (!bannerText) return;
+  const sup = getSupervisorAgent();
+  const collabEnabled = appConfig.collaborationEnabled !== false;
+  const maxHops = appConfig.maxCollaborationHops || 3;
+
+  if (currentView === 'boardroom') {
+    if (sup && (appConfig.accounts?.length || 0) > 1) {
+      bannerText.innerHTML = `<strong>Boardroom Broadcast</strong> · CEO: <strong>${escapeHtml(sup.name)}</strong> (@AgentName · max ${maxHops})`;
+    } else if (collabEnabled && (appConfig.accounts?.length || 0) > 1) {
+      bannerText.innerHTML = `<strong>Boardroom Broadcast</strong> · All agents · @AgentName handoffs (max ${maxHops} rounds)`;
+    } else {
+      bannerText.innerHTML = '<strong>Boardroom Broadcast</strong> · Commands route to all connected agents';
+    }
+  } else {
+    const agent = appConfig.accounts?.find((a) => a.id === currentDirectAgentId);
+    const agentName = agent ? agent.name : 'Agent';
+    const isSup = Boolean(sup && agent && sup.id === agent.id);
+    bannerText.innerHTML = `<strong>Direct Chat</strong> · ${escapeHtml(agentName)} (${escapeHtml(providerLabel(agent?.provider))})${isSup ? ' · CEO' : ''}`;
+  }
+}
+
 function switchView(view, agentId = null) {
   currentView = view;
   const btnBoardroom = document.getElementById('btnViewBoardroom');
   const btnIndividual = document.getElementById('btnViewIndividual');
-  const bannerText = document.getElementById('bannerText');
   const btnReturn = document.getElementById('btnReturnBoardroom');
   const input = document.getElementById('commandInput');
 
@@ -710,9 +757,6 @@ function switchView(view, agentId = null) {
       btnIndividual.setAttribute('aria-selected', 'false');
       btnIndividual.title = 'Direct Chat';
       btnIndividual.setAttribute('aria-label', 'Direct Chat');
-    }
-    if (bannerText) {
-      bannerText.innerHTML = '<strong>Boardroom Broadcast</strong> · Commands route to all connected agents';
     }
     if (btnReturn) btnReturn.style.display = 'none';
     if (input) input.placeholder = 'Type a prompt for your agents (or @AgentName to target one)...';
@@ -729,13 +773,11 @@ function switchView(view, agentId = null) {
       btnIndividual.title = `Direct Chat · ${agentName}`;
       btnIndividual.setAttribute('aria-label', `Direct Chat · ${agentName}`);
     }
-    if (bannerText) {
-      bannerText.innerHTML = `<strong>Direct Chat</strong> · ${escapeHtml(agentName)} (${escapeHtml(providerLabel(agent?.provider))})`;
-    }
     if (btnReturn) btnReturn.style.display = 'inline-flex';
     if (input) input.placeholder = `Message ${agentName} directly...`;
   }
 
+  renderContextBanner();
   renderRoster();
   renderMessages();
   input?.focus();
@@ -773,13 +815,14 @@ function renderDropdownItems() {
   }
 
   appConfig.accounts.forEach((agent) => {
+    const isSup = Boolean(agent.isSupervisor || (appConfig.supervisorAgentId && appConfig.supervisorAgentId === agent.id));
     const item = document.createElement('button');
     item.type = 'button';
     item.className = `dropdown-item ${currentView === 'direct' && currentDirectAgentId === agent.id ? 'active' : ''}`;
     item.setAttribute('role', 'menuitem');
 
     const nameSpan = document.createElement('span');
-    nameSpan.textContent = agent.name;
+    nameSpan.textContent = isSup ? `${agent.name} (CEO)` : agent.name;
     const provSpan = document.createElement('span');
     provSpan.style.fontSize = '11px';
     provSpan.style.color = 'var(--text-secondary)';
@@ -814,10 +857,15 @@ function renderMessages() {
       if (msg.sender === 'system') {
         return msg.mode === 'direct' && msg.targetAgentId === currentDirectAgentId;
       }
+      if (msg.rootTargetAgentId) {
+        return msg.rootTargetAgentId === currentDirectAgentId;
+      }
       return msg.targetAgentId === currentDirectAgentId || msg.sender === currentDirectAgentId;
     });
   } else {
-    filtered = cachedMessages.filter((msg) => !(msg.mode === 'direct' && msg.targetAgentId && msg.targetAgentId !== 'all'));
+    filtered = cachedMessages.filter(
+      (msg) => !(msg.mode === 'direct' && (msg.rootTargetAgentId || (msg.targetAgentId && msg.targetAgentId !== 'all')))
+    );
   }
 
   const { openCount, readyCount, savedCount } = getInAppSummary();
@@ -874,7 +922,12 @@ function renderMessages() {
     const card = document.createElement('article');
     const isUser = msg.sender === 'ceo';
     const isSystem = msg.sender === 'system';
-    card.className = `msg-card ${isUser ? 'user-msg' : isSystem ? 'system-msg' : ''}`;
+    const isSupMsg = Boolean(
+      msg.isSupervisor ||
+      msg.collaborationRole === 'supervisor-plan' ||
+      msg.collaborationRole === 'supervisor-final'
+    );
+    card.className = `msg-card ${isUser ? 'user-msg' : isSystem ? 'system-msg' : ''} ${isSupMsg ? 'supervisor-msg' : ''}`;
 
     const header = document.createElement('div');
     header.className = 'msg-header';
@@ -894,6 +947,27 @@ function renderMessages() {
     metaEl.textContent = parts.join(' · ');
 
     sender.append(nameEl);
+    if (msg.collaborationRole === 'supervisor-plan') {
+      const badge = document.createElement('span');
+      badge.className = 'msg-collab-badge supervisor';
+      badge.innerHTML = `${UI_ICONS.crown}<span>CEO / Supervisor · Round 1/${msg.maxHops || 3}</span>`;
+      sender.appendChild(badge);
+    } else if (msg.collaborationRole === 'supervisor-final') {
+      const badge = document.createElement('span');
+      badge.className = 'msg-collab-badge supervisor';
+      badge.innerHTML = `${UI_ICONS.crown}<span>CEO / Supervisor · Final Synthesis</span>`;
+      sender.appendChild(badge);
+    } else if (msg.fromAgentName) {
+      const badge = document.createElement('span');
+      badge.className = 'msg-collab-badge';
+      badge.textContent = `Round ${msg.hop || 2}/${msg.maxHops || 3} · @${msg.fromAgentName} → @${msg.senderName}`;
+      sender.appendChild(badge);
+    } else if (msg.isSupervisor && !isUser && !isSystem) {
+      const supTag = document.createElement('span');
+      supTag.className = 'supervisor-tag';
+      supTag.innerHTML = `${UI_ICONS.crown}<span>CEO</span>`;
+      sender.appendChild(supTag);
+    }
     if (metaEl.textContent) sender.appendChild(metaEl);
 
     const timeEl = document.createElement('span');
@@ -978,7 +1052,7 @@ async function sendCommand() {
     if (pendingAgents.size > 0) {
       appendThinkingCard(`Waiting for ${Array.from(pendingAgents.values()).join(', ')}...`);
     } else {
-      document.getElementById('thinkingBubble')?.remove();
+      appendThinkingCard('Coordinating @AgentName handoffs...');
     }
   };
 
@@ -991,6 +1065,8 @@ async function sendCommand() {
         mode,
         targetAgentId,
         fileAttachment: pendingAttachment,
+        collaborationEnabled: appConfig.collaborationEnabled !== false,
+        maxHops: appConfig.maxCollaborationHops || 3,
         stream: true
       })
     });
@@ -1025,6 +1101,14 @@ async function sendCommand() {
           if (Array.isArray(parsed.targets)) {
             parsed.targets.forEach((t) => pendingAgents.set(t.id, t.name));
             updatePendingBanner();
+          }
+        } else if (evtName === 'status' && parsed) {
+          if (Array.isArray(parsed.targets)) {
+            pendingAgents.clear();
+            parsed.targets.forEach((t) => pendingAgents.set(t.id, t.name));
+          }
+          if (parsed.message) {
+            appendThinkingCard(parsed.message);
           }
         } else if (evtName === 'reply' && parsed) {
           pendingAgents.delete(parsed.sender);
@@ -1597,10 +1681,11 @@ function renderModalTabs() {
   tabs.innerHTML = '';
 
   appConfig.accounts.forEach((a) => {
+    const isSup = Boolean(a.isSupervisor || (appConfig.supervisorAgentId && appConfig.supervisorAgentId === a.id));
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `tab-btn ${a.id === activeTabId ? 'active' : ''}`;
-    btn.textContent = a.name;
+    btn.textContent = isSup ? `${a.name} ★` : a.name;
     btn.addEventListener('click', () => {
       activeTabId = a.id;
       renderModalTabs();
@@ -1770,6 +1855,10 @@ function renderModalForm() {
       ? 'Saved browser profile found. Click below to open or verify sign-in inside the app.'
       : 'Opens this AI site directly inside the app with an isolated profile and attached connector.';
 
+  const isSup = Boolean(agent.isSupervisor || (appConfig.supervisorAgentId && appConfig.supervisorAgentId === agent.id));
+  const collabEnabled = appConfig.collaborationEnabled !== false;
+  const maxHops = Number(appConfig.maxCollaborationHops) || 3;
+
   form.innerHTML = `
     <div class="form-grid">
       <div class="form-field">
@@ -1779,6 +1868,35 @@ function renderModalForm() {
       <div class="form-field">
         <label for="cfgRole">Account / Role Label</label>
         <input type="text" id="cfgRole" value="${escapeHtml(agent.role || '')}" placeholder="e.g. Muse Account 1, Work Gemini" />
+      </div>
+    </div>
+
+    <div class="provider-box">
+      <label class="checkbox-row" for="cfgIsSupervisor">
+        <input type="checkbox" id="cfgIsSupervisor" ${isSup ? 'checked' : ''} />
+        <span><strong>Designate as CEO / Supervisor</strong> (leads Boardroom commands)</span>
+      </label>
+      <div class="checkbox-sub">
+        When set, Boardroom prompts go to this Supervisor first. It delegates to teammates via <code>@AgentName</code> when needed and synthesizes the final decision.
+      </div>
+      <div class="form-grid">
+        <div class="form-field">
+          <label for="cfgCollabEnabled">Agent Interaction</label>
+          <label class="checkbox-row" for="cfgCollabEnabled" style="min-height: 36px;">
+            <input type="checkbox" id="cfgCollabEnabled" ${collabEnabled ? 'checked' : ''} />
+            <span>Allow <code>@AgentName</code> handoffs</span>
+          </label>
+        </div>
+        <div class="form-field">
+          <label for="cfgMaxHops">Max Collaboration Rounds</label>
+          <select id="cfgMaxHops">
+            <option value="1" ${maxHops === 1 ? 'selected' : ''}>1 round (No follow-up)</option>
+            <option value="2" ${maxHops === 2 ? 'selected' : ''}>2 rounds max</option>
+            <option value="3" ${maxHops === 3 ? 'selected' : ''}>3 rounds max (Default)</option>
+            <option value="4" ${maxHops === 4 ? 'selected' : ''}>4 rounds max</option>
+            <option value="5" ${maxHops === 5 ? 'selected' : ''}>5 rounds max</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -2172,6 +2290,21 @@ async function saveCurrentAccountConfig() {
   agent.apiKey = document.getElementById('cfgApiKey')?.value.trim() || '';
   agent.model = document.getElementById('cfgModel')?.value.trim() || '';
   agent.endpoint = document.getElementById('cfgEndpoint')?.value.trim() || '';
+
+  const isSupervisorChecked = Boolean(document.getElementById('cfgIsSupervisor')?.checked);
+  if (isSupervisorChecked) {
+    appConfig.supervisorAgentId = agent.id;
+    appConfig.accounts.forEach((a) => {
+      a.isSupervisor = a.id === agent.id;
+    });
+  } else if (appConfig.supervisorAgentId === agent.id || agent.isSupervisor) {
+    appConfig.supervisorAgentId = null;
+    agent.isSupervisor = false;
+  }
+
+  appConfig.collaborationEnabled = Boolean(document.getElementById('cfgCollabEnabled')?.checked);
+  const hopsVal = Number(document.getElementById('cfgMaxHops')?.value);
+  appConfig.maxCollaborationHops = Number.isFinite(hopsVal) ? Math.min(Math.max(hopsVal, 1), 5) : 3;
 
   try {
     const data = await persistConfig();

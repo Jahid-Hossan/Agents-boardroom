@@ -13,6 +13,13 @@ import {
   findChromiumExecutable,
   isDownloadingChromium
 } from './lib/inapp-browser.js';
+import {
+  DEFAULT_MAX_HOPS,
+  buildCollaborationPrompt,
+  clampMaxHops,
+  isErrorOrSetupReply,
+  parseAgentHandoffs
+} from './lib/agent-collaboration.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,17 +73,46 @@ function saveJson(file, data) {
   }
 }
 
-let config = loadJson(CONFIG_FILE, {
-  companyName: 'AI Command Center',
-  ceoName: 'CEO',
-  bridgeToken: generateBridgeToken(),
-  accounts: []
-});
+function normalizeConfig(raw = {}) {
+  const accounts = Array.isArray(raw.accounts) ? raw.accounts.map((a) => ({ ...a })) : [];
+  let supervisorAgentId = raw.supervisorAgentId ? String(raw.supervisorAgentId) : null;
 
-if (!config.bridgeToken) {
-  config.bridgeToken = generateBridgeToken();
-  saveJson(CONFIG_FILE, config);
+  if (supervisorAgentId && !accounts.some((a) => a.id === supervisorAgentId)) {
+    supervisorAgentId = null;
+  }
+  if (!supervisorAgentId) {
+    const flagged = accounts.find((a) => a.isSupervisor === true);
+    if (flagged) supervisorAgentId = flagged.id;
+  }
+
+  for (const acc of accounts) {
+    acc.isSupervisor = Boolean(supervisorAgentId && acc.id === supervisorAgentId);
+  }
+
+  return {
+    companyName: raw.companyName || 'AI Command Center',
+    ceoName: raw.ceoName || 'CEO',
+    bridgeToken: raw.bridgeToken || generateBridgeToken(),
+    supervisorAgentId,
+    collaborationEnabled: raw.collaborationEnabled !== false,
+    maxCollaborationHops: clampMaxHops(raw.maxCollaborationHops, DEFAULT_MAX_HOPS),
+    accounts
+  };
 }
+
+let config = normalizeConfig(
+  loadJson(CONFIG_FILE, {
+    companyName: 'AI Command Center',
+    ceoName: 'CEO',
+    bridgeToken: generateBridgeToken(),
+    supervisorAgentId: null,
+    collaborationEnabled: true,
+    maxCollaborationHops: DEFAULT_MAX_HOPS,
+    accounts: []
+  })
+);
+
+saveJson(CONFIG_FILE, config);
 
 const bridgeStore = new BridgeStore(config.bridgeToken);
 const defaultProfilesRoot = process.env.PROFILES_DIR || path.join(os.homedir(), '.muse-boardroom', 'profiles');
@@ -402,16 +438,55 @@ async function callDesktopBrowserSession(agent, promptText) {
   return `**Desktop Browser Bridge is not connected.**\n\nTo send commands directly to your logged-in **${agent.name}** tab (${targetUrl || 'e.g. muse.ai or gemini.google.com'}):\n1. Click **Desktop Bridge** in the top bar.\n2. Download & load the pre-configured Chrome extension once in \`chrome://extensions\`.\n3. Keep your AI tab logged in and open in Chrome.`;
 }
 
+function extractDemoCorePrompt(prompt = '') {
+  const raw = String(prompt || '');
+  const reqMatch = raw.match(/Original user request:\s*([\s\S]*?)(?:\n\n|\nRequest from|$)/i) ||
+    raw.match(/User request:\s*([\s\S]*)$/i);
+  const extracted = reqMatch ? reqMatch[1].trim() : raw;
+  return extracted.replace(/^@[\w.-]+\s*/i, '').trim();
+}
+
 function generateDemoResponse(agent, prompt) {
-  const cleanPrompt = prompt.replace(/^@[\w.-]+\s*/i, '').trim();
+  const cleanPrompt = extractDemoCorePrompt(prompt);
   const lower = cleanPrompt.toLowerCase();
   const roleStr = agent.role ? ` (${agent.role})` : '';
 
   if (/^(hello|hi|hey|greetings|good\s*(morning|afternoon|evening)|hola|salam)\b/i.test(lower)) {
-    return `Hello! **${agent.name}**${roleStr} is running in **Offline Demo** mode. Connect the Desktop Browser Bridge or an API key in **Manage Agents** for live AI responses.`;
+    return `Hello! **${agent.name}**${roleStr} is running in **Offline Demo** mode. Connect the In-App Browser or an API key in **Manage Agents** for live AI responses.`;
   }
 
-  return `**[Offline Demo — ${agent.name}${roleStr}]** Received: "${cleanPrompt}".\n\nSwitch this agent to **Desktop Browser Session**, **Google Gemini API**, or **OpenAI / Groq** in **Manage Agents** to get real AI output.`;
+  return `**[Offline Demo — ${agent.name}${roleStr}]** Received: "${cleanPrompt}".\n\nSwitch this agent to **In-App Browser**, **Google Gemini API**, or **OpenAI / Groq** in **Manage Agents** to get real AI output.`;
+}
+
+async function invokeSingleAgent(agent, promptText, fileAttachment = null) {
+  const executionPromise = (async () => {
+    if (agent.provider === 'inapp-browser') {
+      return await inAppBrowser.sendPrompt(agent, promptText, fileAttachment);
+    }
+    if (agent.provider === 'browser-session' || agent.provider === 'browser-automation') {
+      return await callDesktopBrowserSession(agent, appendAttachmentToTextPrompt(promptText, fileAttachment));
+    }
+    if (agent.provider === 'gemini') {
+      return await callGeminiApi(agent, promptText, fileAttachment);
+    }
+    if (agent.provider === 'openai' || agent.provider === 'custom-api') {
+      return await callOpenAiApi(agent, promptText, fileAttachment);
+    }
+    if (agent.provider === 'docker-web') {
+      return await callDockerWebAgent(agent, appendAttachmentToTextPrompt(promptText, fileAttachment));
+    }
+    return generateDemoResponse(agent, appendAttachmentToTextPrompt(promptText, fileAttachment));
+  })();
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Request timed out after 30 seconds.')), 30000)
+  );
+
+  try {
+    return await Promise.race([executionPromise, timeoutPromise]);
+  } catch (err) {
+    return `**${agent.name} error:** ${err.message}`;
+  }
 }
 
 export async function requestHandler(req, res) {
@@ -815,11 +890,11 @@ export async function requestHandler(req, res) {
     if (req.method === 'POST') {
       try {
         const newConfig = await readJsonBody(req);
-        config = {
+        config = normalizeConfig({
           ...config,
           ...newConfig,
           bridgeToken: config.bridgeToken
-        };
+        });
         saveJson(CONFIG_FILE, config);
         sendJson(res, 200, { success: true, config });
       } catch (e) {
@@ -943,7 +1018,7 @@ export async function requestHandler(req, res) {
     return;
   }
 
-  // Command Dispatch Endpoint
+  // Command Dispatch Endpoint (with @AgentName Multi-Hop & CEO/Supervisor Orchestration)
   if (pathname === '/api/command' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req);
@@ -954,31 +1029,56 @@ export async function requestHandler(req, res) {
         return;
       }
 
+      const trimmedCommand = command.trim();
+      const allAgents = Array.isArray(config.accounts) ? config.accounts : [];
+      const maxHops = clampMaxHops(payload.maxHops ?? config.maxCollaborationHops, DEFAULT_MAX_HOPS);
+      const collabEnabled =
+        payload.collaborationEnabled !== undefined
+          ? Boolean(payload.collaborationEnabled)
+          : config.collaborationEnabled !== false;
+
       const ceoMsg = {
         id: `ceo-${Date.now()}`,
         sender: 'ceo',
         role: 'User',
         senderName: config.ceoName || 'You',
-        text: command.trim(),
+        text: trimmedCommand,
         fileAttachment: fileAttachment || null,
         mode,
         targetAgentId: targetAgentId || 'all',
+        rootTargetAgentId: mode === 'direct' ? (targetAgentId || null) : null,
         timestamp: new Date().toISOString()
       };
       messages.push(ceoMsg);
 
+      const supervisor = allAgents.find((a) => a.id === config.supervisorAgentId || a.isSupervisor) || null;
+      const hasExplicitAll = /@all\b/i.test(trimmedCommand);
+      const mentionedInPrompt =
+        (!targetAgentId || targetAgentId === 'all') && !hasExplicitAll
+          ? parseAgentHandoffs(trimmedCommand, allAgents, '__user__').targets.map((t) => t.agent)
+          : [];
+
+      const isBoardroomBroadcast = mode !== 'direct' && (!targetAgentId || targetAgentId === 'all');
+      const supervisorModeActive = Boolean(
+        isBoardroomBroadcast &&
+        supervisor &&
+        !hasExplicitAll &&
+        mentionedInPrompt.length === 0 &&
+        allAgents.length > 1
+      );
+
       let agentsToInvoke = [];
       if (targetAgentId && targetAgentId !== 'all') {
-        const targeted = config.accounts.find((a) => a.id === targetAgentId);
+        const targeted = allAgents.find((a) => a.id === targetAgentId);
         if (targeted) agentsToInvoke = [targeted];
-      } else if (/@all\b/i.test(command)) {
-        agentsToInvoke = config.accounts;
+      } else if (hasExplicitAll) {
+        agentsToInvoke = allAgents;
+      } else if (mentionedInPrompt.length > 0) {
+        agentsToInvoke = mentionedInPrompt;
+      } else if (supervisorModeActive) {
+        agentsToInvoke = [supervisor];
       } else {
-        const mentioned = config.accounts.filter((a) => {
-          const re = new RegExp(`@${a.name.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`, 'i');
-          return re.test(command);
-        });
-        agentsToInvoke = mentioned.length > 0 ? mentioned : config.accounts;
+        agentsToInvoke = allAgents;
       }
 
       if (agentsToInvoke.length === 0) {
@@ -1037,71 +1137,224 @@ export async function requestHandler(req, res) {
         });
         writeSse('start', {
           ceoMessage: ceoMsg,
-          targets: agentsToInvoke.map((a) => ({ id: a.id, name: a.name }))
+          targets: agentsToInvoke.map((a) => ({ id: a.id, name: a.name })),
+          supervisorAgentId: supervisorModeActive ? supervisor.id : null,
+          maxHops
         });
+        if (supervisorModeActive) {
+          writeSse('status', {
+            message: `CEO / Supervisor (${supervisor.name}) reviewing request (Round 1/${maxHops})...`,
+            hop: 1,
+            maxHops,
+            targets: [{ id: supervisor.id, name: supervisor.name }]
+          });
+        }
       }
 
-      const replyPromises = agentsToInvoke.map(async (agent) => {
-        let replyText = '';
+      const allTurnReplies = [];
 
-        const executionPromise = (async () => {
-          if (agent.provider === 'inapp-browser') {
-            return await inAppBrowser.sendPrompt(agent, command, fileAttachment);
+      // Round 1
+      const hop1Replies = await Promise.all(
+        agentsToInvoke.map(async (agent) => {
+          let agentPrompt = trimmedCommand;
+          if (supervisorModeActive) {
+            agentPrompt = buildCollaborationPrompt({
+              userCommand: trimmedCommand,
+              agent,
+              allAgents,
+              isSupervisorInitial: true,
+              hop: 1,
+              maxHops
+            });
+          } else if (collabEnabled && allAgents.length > 1) {
+            agentPrompt = buildCollaborationPrompt({
+              userCommand: trimmedCommand,
+              agent,
+              allAgents,
+              hop: 1,
+              maxHops
+            });
           }
-          if (agent.provider === 'browser-session' || agent.provider === 'browser-automation') {
-            return await callDesktopBrowserSession(agent, appendAttachmentToTextPrompt(command, fileAttachment));
-          }
-          if (agent.provider === 'gemini') {
-            return await callGeminiApi(agent, command, fileAttachment);
-          }
-          if (agent.provider === 'openai' || agent.provider === 'custom-api') {
-            return await callOpenAiApi(agent, command, fileAttachment);
-          }
-          if (agent.provider === 'docker-web') {
-            return await callDockerWebAgent(agent, appendAttachmentToTextPrompt(command, fileAttachment));
-          }
-          return generateDemoResponse(agent, appendAttachmentToTextPrompt(command, fileAttachment));
-        })();
 
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Request timed out after 30 seconds.')), 30000)
-        );
+          const replyText = await invokeSingleAgent(agent, agentPrompt, fileAttachment);
+          const replyObj = {
+            id: `reply-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            sender: agent.id,
+            targetAgentId: agent.id,
+            rootTargetAgentId: mode === 'direct' ? (targetAgentId || null) : null,
+            rootMessageId: ceoMsg.id,
+            mode,
+            hop: 1,
+            maxHops,
+            isSupervisor: Boolean(supervisor && agent.id === supervisor.id),
+            collaborationRole: supervisorModeActive ? 'supervisor-plan' : 'primary',
+            role: agent.role || agent.provider || 'AI Agent',
+            senderName: agent.name,
+            avatar: agent.avatar || 'AI',
+            color: agent.color || '#3B82F6',
+            text: replyText,
+            timestamp: new Date().toISOString()
+          };
 
-        try {
-          replyText = await Promise.race([executionPromise, timeoutPromise]);
-        } catch (err) {
-          replyText = `**${agent.name} error:** ${err.message}`;
+          messages.push(replyObj);
+          allTurnReplies.push(replyObj);
+          writeSse('reply', replyObj);
+          return replyObj;
+        })
+      );
+
+      // Rounds 2 .. maxHops via @AgentName handoffs
+      if (collabEnabled && allAgents.length > 1 && maxHops > 1) {
+        const visitedEdges = new Set();
+        let frontier = hop1Replies;
+
+        for (let hop = 2; hop <= maxHops; hop++) {
+          const targetMap = new Map();
+
+          for (const prevReply of frontier) {
+            if (isErrorOrSetupReply(prevReply.text)) continue;
+            const { targets } = parseAgentHandoffs(prevReply.text, allAgents, prevReply.sender);
+            for (const { agent: targetAgent, subPrompt } of targets) {
+              const edgeKey = `${prevReply.sender}->${targetAgent.id}`;
+              if (visitedEdges.has(edgeKey)) continue;
+              visitedEdges.add(edgeKey);
+
+              if (!targetMap.has(targetAgent.id)) {
+                targetMap.set(targetAgent.id, {
+                  targetAgent,
+                  fromIds: [prevReply.sender],
+                  senders: [prevReply.senderName],
+                  subPrompts: [subPrompt],
+                  sourceTexts: [prevReply.text]
+                });
+              } else {
+                const existing = targetMap.get(targetAgent.id);
+                if (!existing.fromIds.includes(prevReply.sender)) {
+                  existing.fromIds.push(prevReply.sender);
+                  existing.senders.push(prevReply.senderName);
+                }
+                existing.subPrompts.push(subPrompt);
+                existing.sourceTexts.push(prevReply.text);
+              }
+            }
+          }
+
+          if (targetMap.size === 0) break;
+
+          const tasks = Array.from(targetMap.values());
+          writeSse('status', {
+            message: `Round ${hop}/${maxHops}: ${tasks
+              .map((t) => `${t.senders.map((s) => `@${s}`).join('+')} → @${t.targetAgent.name}`)
+              .join(' · ')}`,
+            hop,
+            maxHops,
+            targets: tasks.map((t) => ({ id: t.targetAgent.id, name: t.targetAgent.name }))
+          });
+
+          const hopReplies = await Promise.all(
+            tasks.map(async (task) => {
+              const handoffPrompt = buildCollaborationPrompt({
+                userCommand: trimmedCommand,
+                agent: task.targetAgent,
+                allAgents,
+                incomingContext: {
+                  fromName: task.senders.join(', '),
+                  subPrompt: task.subPrompts.join('\n\n'),
+                  sourceText: task.sourceTexts.join('\n\n---\n\n')
+                },
+                hop,
+                maxHops
+              });
+
+              const replyText = await invokeSingleAgent(task.targetAgent, handoffPrompt, fileAttachment);
+              const replyObj = {
+                id: `reply-${task.targetAgent.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                sender: task.targetAgent.id,
+                targetAgentId: task.targetAgent.id,
+                rootTargetAgentId: mode === 'direct' ? (targetAgentId || null) : null,
+                rootMessageId: ceoMsg.id,
+                mode,
+                hop,
+                maxHops,
+                fromAgentId: task.fromIds[0],
+                fromAgentName: task.senders.join(', '),
+                isSupervisor: Boolean(supervisor && task.targetAgent.id === supervisor.id),
+                collaborationRole: 'handoff',
+                role: task.targetAgent.role || task.targetAgent.provider || 'AI Agent',
+                senderName: task.targetAgent.name,
+                avatar: task.targetAgent.avatar || 'AI',
+                color: task.targetAgent.color || '#3B82F6',
+                text: replyText,
+                timestamp: new Date().toISOString()
+              };
+
+              messages.push(replyObj);
+              allTurnReplies.push(replyObj);
+              writeSse('reply', replyObj);
+              return replyObj;
+            })
+          );
+
+          frontier = hopReplies;
         }
+      }
 
-        const replyObj = {
-          id: `reply-${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          sender: agent.id,
-          targetAgentId: agent.id,
-          mode,
-          role: agent.role || agent.provider || 'AI Agent',
-          senderName: agent.name,
-          avatar: agent.avatar || 'AI',
-          color: agent.color || '#3B82F6',
-          text: replyText,
-          timestamp: new Date().toISOString()
-        };
+      // Supervisor Final Synthesis (only when Supervisor delegated & teammates responded)
+      if (supervisorModeActive && supervisor) {
+        const workerReplies = allTurnReplies.filter(
+          (r) => r.sender !== supervisor.id && !isErrorOrSetupReply(r.text)
+        );
+        if (workerReplies.length > 0) {
+          writeSse('status', {
+            message: `CEO / Supervisor (${supervisor.name}) synthesizing final decision...`,
+            targets: [{ id: supervisor.id, name: supervisor.name }]
+          });
 
-        messages.push(replyObj);
-        writeSse('reply', replyObj);
-        return replyObj;
-      });
+          const synthPrompt = buildCollaborationPrompt({
+            userCommand: trimmedCommand,
+            agent: supervisor,
+            allAgents,
+            collectedReplies: workerReplies,
+            isSupervisorSynthesis: true
+          });
 
-      const resolvedReplies = await Promise.all(replyPromises);
+          const synthText = await invokeSingleAgent(supervisor, synthPrompt, null);
+          const highestHop = allTurnReplies.reduce((m, r) => Math.max(m, Number(r.hop) || 1), 1);
+          const synthReplyObj = {
+            id: `reply-${supervisor.id}-synth-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            sender: supervisor.id,
+            targetAgentId: supervisor.id,
+            rootTargetAgentId: null,
+            rootMessageId: ceoMsg.id,
+            mode,
+            hop: highestHop,
+            maxHops,
+            isSupervisor: true,
+            collaborationRole: 'supervisor-final',
+            role: supervisor.role || supervisor.provider || 'AI Agent',
+            senderName: supervisor.name,
+            avatar: supervisor.avatar || 'AI',
+            color: supervisor.color || '#3B82F6',
+            text: synthText,
+            timestamp: new Date().toISOString()
+          };
+
+          messages.push(synthReplyObj);
+          allTurnReplies.push(synthReplyObj);
+          writeSse('reply', synthReplyObj);
+        }
+      }
+
       saveJson(MESSAGES_FILE, messages);
 
       if (useStream) {
-        writeSse('done', { success: true, ceoMessage: ceoMsg, replies: resolvedReplies });
+        writeSse('done', { success: true, ceoMessage: ceoMsg, replies: allTurnReplies });
         if (!res.writableEnded) res.end();
       } else {
         sendJson(res, 200, {
           success: true,
           ceoMessage: ceoMsg,
-          replies: resolvedReplies
+          replies: allTurnReplies
         });
       }
     } catch (e) {

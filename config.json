@@ -1,7 +1,10 @@
 {
   "companyName": "Muse Boardroom",
   "ceoName": "You",
-  "bridgeToken": "",
+  "bridgeToken": "mb_3dedd9f5165b3402167bc2c3562b6bc3",
+  "supervisorAgentId": null,
+  "collaborationEnabled": true,
+  "maxCollaborationHops": 3,
   "accounts": [
     {
       "id": "muse",
@@ -17,7 +20,8 @@
       "apiKey": "",
       "model": "",
       "endpoint": "",
-      "systemPrompt": ""
+      "systemPrompt": "",
+      "isSupervisor": false
     },
     {
       "id": "gemini",
@@ -33,7 +37,8 @@
       "apiKey": "",
       "model": "gemini-4-hydrogen",
       "endpoint": "",
-      "systemPrompt": ""
+      "systemPrompt": "",
+      "isSupervisor": false
     },
     {
       "id": "chatgpt",
@@ -49,7 +54,8 @@
       "apiKey": "",
       "model": "gpt-4o-mini",
       "endpoint": "",
-      "systemPrompt": ""
+      "systemPrompt": "",
+      "isSupervisor": false
     },
     {
       "id": "grok",
@@ -65,7 +71,8 @@
       "apiKey": "",
       "model": "",
       "endpoint": "",
-      "systemPrompt": ""
+      "systemPrompt": "",
+      "isSupervisor": false
     }
   ]
 }
