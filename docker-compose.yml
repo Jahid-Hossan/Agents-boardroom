@@ -1,13 +1,13 @@
 services:
   muse-ceo:
     build: .
-    container_name: muse-ceo-command
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       NODE_ENV: production
       PORT: "3000"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       DATA_DIR: /app/data
       PROFILES_DIR: /app/data/profiles
     volumes:
