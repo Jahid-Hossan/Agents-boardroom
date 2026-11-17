@@ -22,6 +22,8 @@
   "license": "MIT",
   "dependencies": {
     "@google/genai": "^3.4.0",
-    "puppeteer-core": "^25.17.0"
+    "@puppeteer/browsers": "^3.2.7",
+    "puppeteer-core": "^25.17.0",
+    "yauzl": "^3.4.0"
   }
 }
