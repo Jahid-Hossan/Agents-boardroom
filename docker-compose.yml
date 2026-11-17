@@ -1,12 +1,17 @@
-version: '3.8'
-
 services:
   muse-ceo:
     build: .
     container_name: muse-ceo-command
-    restart: always
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
+      NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /app/data
+      PROFILES_DIR: /app/data/profiles
+    volumes:
+      - muse_boardroom_data:/app/data
+
+volumes:
+  muse_boardroom_data:
