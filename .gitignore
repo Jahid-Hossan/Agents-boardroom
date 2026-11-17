@@ -1,0 +1,11 @@
+node_modules/
+profiles/
+public/uploads/
+.env
+.env.local
+.env.*.local
+.aistudio/
+.playwright-cli/
+.DS_Store
+Thumbs.db
+*.log

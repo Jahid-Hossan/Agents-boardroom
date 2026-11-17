@@ -1,0 +1,27 @@
+{
+  "name": "muse-ceo-command",
+  "version": "1.0.0",
+  "description": "Multi-Agent Executive Command Center for 4 Muse AI Accounts",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "test": "node --test lib/*.test.js",
+    "build": "node --check server.js && node --check browser-orchestrator.js && node --check helper.js && node --check lib/zip-builder.js && node --check lib/bridge-store.js && node --check lib/bridge-extension-files.js && node --check lib/inapp-browser.js && node --check public/app.js",
+    "lint": "node --check server.js && node --check browser-orchestrator.js && node --check helper.js && node --check lib/zip-builder.js && node --check lib/bridge-store.js && node --check lib/bridge-extension-files.js && node --check lib/inapp-browser.js && node --check public/app.js"
+  },
+  "keywords": [
+    "muse",
+    "ai",
+    "multi-agent",
+    "ceo",
+    "group-chat"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^3.4.0",
+    "puppeteer-core": "^25.17.0"
+  }
+}

@@ -1,0 +1,10 @@
+[
+  {
+    "id": "init-1",
+    "sender": "system",
+    "role": "System",
+    "senderName": "System",
+    "text": "Command Center ready with **Muse AI**, **Gemini**, **ChatGPT**, and **Grok**. Click **In-App Browser** (or **Browser** on any agent) to sign in right inside the app—the attached connector keeps your session active.",
+    "timestamp": "2026-11-17T16:00:00.000Z"
+  }
+]

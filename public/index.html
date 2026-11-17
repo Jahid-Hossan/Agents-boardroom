@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Muse Boardroom — Multi-Agent AI Command Center</title>
+  <meta name="description" content="Connect Muse AI, Gemini, ChatGPT, and API agents in one unified command center via your desktop browser session." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <div class="header-left">
+        <button type="button" class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Toggle agents sidebar" title="Toggle agents sidebar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+        <div class="brand-group">
+          <div class="brand-title">Muse Boardroom</div>
+          <div class="brand-meta" id="headerMeta">
+            <span id="agentCountText">0 agents</span>
+            <span aria-hidden="true">·</span>
+            <span id="headerBridgeText">In-App Connector ready</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="view-switch" role="tablist" aria-label="Chat view mode">
+          <button type="button" class="btn-seg btn-seg-icon active" id="btnViewBoardroom" role="tab" aria-selected="true" aria-label="Boardroom Broadcast" title="Boardroom Broadcast">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </button>
+          <div class="dropdown-wrapper">
+            <button type="button" class="btn-seg btn-seg-icon" id="btnViewIndividual" role="tab" aria-selected="false" aria-expanded="false" aria-label="Direct Chat" title="Direct Chat">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+            <div class="agent-dropdown" id="agentDropdown" role="menu"></div>
+          </div>
+        </div>
+
+        <button type="button" class="btn btn-primary btn-icon-pill" id="btnOpenInAppBrowser" aria-label="In-App Browser" title="In-App Browser">
+          <span class="bridge-dot" id="headerBrowserDot" aria-hidden="true"></span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+        </button>
+
+        <button type="button" class="btn btn-icon-pill hide-mobile" id="btnBridgeSetup" aria-label="Optional Desktop Chrome Extension Bridge" title="Optional Desktop Chrome Extension Bridge">
+          <span class="bridge-dot" id="headerBridgeDot" aria-hidden="true"></span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 22v-5" />
+            <path d="M9 8V2" />
+            <path d="M15 8V2" />
+            <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+          </svg>
+        </button>
+
+        <button type="button" class="btn btn-icon-md hide-mobile" id="btnManageAgents" aria-label="Manage Agents" title="Manage Agents">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="4" y1="21" x2="4" y2="14" />
+            <line x1="4" y1="10" x2="4" y2="3" />
+            <line x1="12" y1="21" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12" y2="3" />
+            <line x1="20" y1="21" x2="20" y2="16" />
+            <line x1="20" y1="12" x2="20" y2="3" />
+            <line x1="1" y1="14" x2="7" y2="14" />
+            <line x1="9" y1="8" x2="15" y2="8" />
+            <line x1="17" y1="16" x2="23" y2="16" />
+          </svg>
+        </button>
+        <button type="button" class="btn btn-danger btn-icon-md hide-mobile" id="btnClearChat" aria-label="Clear Chat" title="Clear Chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+      <aside class="sidebar" id="sidebar" aria-label="Browser Connector and Agents">
+        <section class="sidebar-section">
+          <div class="section-header">
+            <h2 class="section-title">In-App Browser Connector</h2>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" class="btn btn-sm btn-icon-sm btn-primary" id="btnSidebarOpenBrowser" aria-label="Open In-App Browser" title="Open In-App Browser">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+              </button>
+              <button type="button" class="btn btn-sm btn-icon-sm" id="btnSidebarBridgeSetup" aria-label="Desktop Chrome Extension Bridge" title="Desktop Chrome Extension Bridge">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 22v-5" />
+                  <path d="M9 8V2" />
+                  <path d="M15 8V2" />
+                  <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="bridge-summary">
+            <div class="bridge-state-row">
+              <span class="bridge-dot connected" id="sidebarBridgeDot" aria-hidden="true"></span>
+              <span id="sidebarBridgeStatus">Connector attached</span>
+            </div>
+            <p class="bridge-sub" id="sidebarBridgeHelp">
+              Click the globe icon on any agent to sign in inside this app. Sessions stay saved across restarts.
+            </p>
+            <div class="detected-tabs" id="detectedTabsList"></div>
+          </div>
+        </section>
+
+        <section class="agents-container">
+          <div class="section-header">
+            <h2 class="section-title">Connected Agents</h2>
+            <button type="button" class="btn btn-sm btn-icon-sm btn-primary" id="btnQuickAddAgent" aria-label="Add Agent" title="Add Agent">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          </div>
+          <div id="agentRoster" data-testid="agent-roster"></div>
+        </section>
+      </aside>
+
+      <main class="chat-main">
+        <div class="context-bar">
+          <div id="bannerText">
+            <strong>Boardroom Broadcast</strong> · Commands route to all connected agents
+          </div>
+          <button type="button" class="btn btn-sm btn-icon-sm" id="btnReturnBoardroom" style="display: none;" aria-label="Return to Boardroom" title="Return to Boardroom">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="chat-feed" id="chatFeed" data-testid="chat-feed"></div>
+
+        <div class="composer">
+          <div class="composer-inner">
+            <div class="mention-strip" id="mentionBar">
+              <span class="mention-label">Mentions:</span>
+              <div id="mentionChips" style="display: flex; gap: 6px;"></div>
+            </div>
+
+            <div class="attachment-bar" id="attachmentPreview">
+              <img id="previewImg" src="" alt="Attached file preview" />
+              <span id="previewFileBadge" class="attachment-file-badge" style="display: none;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+              </span>
+              <span id="previewName" class="attachment-name"></span>
+              <button type="button" class="btn btn-sm btn-icon-sm btn-primary" id="btnTranscribeAttachment" style="display: none;" aria-label="Transcribe audio to prompt" title="Transcribe audio to prompt">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="22" />
+                </svg>
+              </button>
+              <button type="button" class="btn btn-sm btn-icon-sm btn-danger" id="btnClearAttachment" aria-label="Remove attachment" title="Remove attachment">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            <div class="voice-recording-bar" id="voiceRecordingBar" role="status" aria-live="polite">
+              <div class="voice-recording-left">
+                <span class="voice-dot" aria-hidden="true"></span>
+                <span id="voiceTimer" class="mono voice-timer">0:00</span>
+                <span id="voiceStatusText" class="voice-status-text">Listening... speak your prompt</span>
+              </div>
+              <div class="voice-recording-actions">
+                <button type="button" class="btn btn-sm btn-icon-sm" id="btnCancelVoice" aria-label="Cancel voice recording" title="Cancel voice recording">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+                <button type="button" class="btn btn-sm btn-icon-sm btn-primary" id="btnStopVoice" aria-label="Stop recording and generate prompt" title="Stop recording and generate prompt">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <form class="composer-row" id="commandForm">
+              <input type="file" id="filePicker" class="sr-only-input" accept="image/*,.pdf,.txt,.md,.csv,.json,.js,.ts,.py,.doc,.docx,audio/*" />
+              <button type="button" class="icon-btn" id="attachBtn" aria-label="Attach image or file" title="Attach image or file">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+              <button type="button" class="icon-btn" id="micBtn" aria-label="Voice prompt" title="Voice prompt">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="22" />
+                </svg>
+              </button>
+              <input
+                type="text"
+                id="commandInput"
+                class="command-input"
+                aria-label="Command input"
+                placeholder="Type a prompt for your agents (or @AgentName to target one)..."
+                autocomplete="off"
+              />
+              <button type="submit" class="btn btn-primary send-btn" id="sendBtn" aria-label="Send message" title="Send message">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </button>
+            </form>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Desktop Bridge Setup Modal -->
+  <div id="bridgeModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bridgeModalTitle">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="bridgeModalTitle">Desktop Browser Bridge Setup</h2>
+        <button type="button" class="modal-close" id="btnCloseBridgeModal" aria-label="Close bridge setup" title="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); font-size: 13px;">
+          Connect one or more Chrome Profiles so your logged-in AI accounts (<strong>Muse AI</strong>, <strong>Gemini</strong>, <strong>ChatGPT</strong>, <strong>Grok</strong>) stay connected permanently across restarts.
+        </p>
+
+        <div class="provider-box">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+            <div>
+              <div style="font-weight: 700; font-size: 14px;">1. Download Pre-Configured Extension</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">Paired to this Command Center URL and token.</div>
+            </div>
+            <a href="/api/bridge/extension.zip" download="muse-desktop-bridge.zip" class="btn btn-primary" id="downloadExtensionLink">
+              Download Bridge (.zip)
+            </a>
+          </div>
+        </div>
+
+        <ol class="step-list">
+          <li>Unzip <strong>muse-desktop-bridge.zip</strong> once on your computer.</li>
+          <li>In Chrome, open <strong>chrome://extensions</strong>, enable <strong>Developer mode</strong>, and click <strong>Load unpacked</strong> on the unzipped folder.</li>
+          <li><strong>Multiple Accounts (2+ Muse AI or Gemini):</strong> Open another Chrome Profile, load the same unzipped folder there, and give it a label in the extension popup (e.g. <em>Work Chrome</em>, <em>Account 2</em>). Each profile stays connected forever.</li>
+        </ol>
+
+        <div class="provider-box" id="bridgeProfilesBox">
+          <div style="font-weight: 700; font-size: 13px;">Connected Chrome Profiles</div>
+          <div id="bridgeProfilesList" class="profile-list">
+            <span style="font-size: 12px; color: var(--text-secondary);">No Chrome Profiles connected yet.</span>
+          </div>
+        </div>
+
+        <div class="provider-box">
+          <div class="form-field">
+            <label for="bridgeServerUrlInput">Command Center URL</label>
+            <div class="copy-row">
+              <input type="text" id="bridgeServerUrlInput" class="mono" readonly />
+              <button type="button" class="btn btn-sm btn-icon-sm" id="btnCopyServerUrl" aria-label="Copy Command Center URL" title="Copy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="form-field">
+            <label for="bridgeTokenInput">Pairing Token</label>
+            <div class="copy-row">
+              <input type="text" id="bridgeTokenInput" class="mono" readonly />
+              <button type="button" class="btn btn-sm btn-icon-sm" id="btnCopyBridgeToken" aria-label="Copy Pairing Token" title="Copy">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                </svg>
+              </button>
+              <button type="button" class="btn btn-sm btn-icon-sm" id="btnRotateToken" aria-label="Rotate Pairing Token" title="Rotate Pairing Token">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                  <path d="M21 3v5h-5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="bridgeModalStatus" style="font-size: 12px; color: var(--text-secondary);">Waiting for extension heartbeat...</span>
+        <button type="button" class="btn btn-icon-md" id="btnDoneBridgeModal" aria-label="Done" title="Done">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manage Agents Modal -->
+  <div id="configModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="configModalTitle">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="configModalTitle">Manage Agents</h2>
+        <button type="button" class="modal-close" id="btnCloseConfigModal" aria-label="Close manage agents" title="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-tabs" id="modalTabs"></div>
+      <div class="modal-body" id="modalForm"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-danger btn-icon-md" id="btnModalDeleteAgent" style="display: none;" aria-label="Remove Agent" title="Remove Agent">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+        <div style="margin-left: auto; display: flex; gap: 8px;">
+          <button type="button" class="btn btn-icon-md" id="btnCancelConfigModal" aria-label="Cancel" title="Cancel">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+          <button type="button" class="btn btn-primary btn-icon-md" id="btnSaveAgentConfig" aria-label="Save Agent" title="Save Agent">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+              <polyline points="17 21 17 13 7 13 7 21" />
+              <polyline points="7 3 7 8 15 8" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Built-In In-App Browser + Attached Connector Workspace Modal -->
+  <div id="browserWorkspaceModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="browserWorkspaceTitle">
+    <div class="modal-panel browser-modal-panel">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap;">
+          <h2 id="browserWorkspaceTitle">In-App Browser &amp; Attached Connector</h2>
+          <span id="browserConnectorBadge" class="connector-badge">Connector Standby</span>
+        </div>
+        <button type="button" class="modal-close" id="btnCloseBrowserWorkspace" aria-label="Close in-app browser" title="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-tabs" id="browserAgentTabs"></div>
+
+      <div class="browser-toolbar">
+        <div class="browser-nav-group">
+          <button type="button" class="btn btn-sm btn-icon-sm" id="btnBrowserBack" aria-label="Browser Back" title="Back">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+          <button type="button" class="btn btn-sm btn-icon-sm" id="btnBrowserReload" aria-label="Reload page" title="Reload">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
+          </button>
+        </div>
+
+        <form class="browser-url-form" id="browserUrlForm">
+          <input
+            type="text"
+            id="browserUrlInput"
+            class="mono"
+            aria-label="Browser URL"
+            placeholder="https://muse.ai"
+          />
+          <button type="submit" class="btn btn-sm btn-icon-sm btn-primary" id="btnBrowserGo" aria-label="Go to URL" title="Go">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </button>
+        </form>
+
+        <div class="browser-quick-sites">
+          <button type="button" class="btn btn-sm browser-site-chip" data-url="https://muse.ai">Muse AI</button>
+          <button type="button" class="btn btn-sm browser-site-chip" data-url="https://gemini.google.com/app">Gemini</button>
+          <button type="button" class="btn btn-sm browser-site-chip" data-url="https://chatgpt.com">ChatGPT</button>
+          <button type="button" class="btn btn-sm browser-site-chip" data-url="https://grok.com">Grok</button>
+        </div>
+
+        <div class="browser-nav-group">
+          <button type="button" class="btn btn-sm btn-icon-sm" id="btnBrowserCheckReady" aria-label="Check Ready" title="Check Ready">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+          </button>
+          <button type="button" class="btn btn-sm btn-icon-sm btn-danger" id="btnBrowserCloseTab" aria-label="Close Tab" title="Close Tab">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="browser-viewport-wrap" id="browserViewportWrap" data-testid="browser-viewport">
+        <div id="browserViewportPlaceholder" class="browser-viewport-placeholder">
+          Opening isolated browser profile and attaching connector...
+        </div>
+        <img
+          id="browserStreamImg"
+          class="browser-stream-img"
+          tabindex="0"
+          alt="Interactive In-App Browser Viewport"
+          draggable="false"
+        />
+      </div>
+
+      <div class="browser-quick-bar">
+        <span class="browser-hint" id="browserSessionHint">
+          Click inside the browser page above to type directly, or paste credentials / OTP below:
+        </span>
+        <form class="browser-quick-form" id="browserQuickTextForm">
+          <input
+            type="text"
+            id="browserQuickTextInput"
+            placeholder="Type or paste email, password, or OTP into focused field..."
+            autocomplete="off"
+          />
+          <button type="submit" class="btn btn-primary btn-icon-lg" id="btnBrowserSendText" aria-label="Send Text" title="Send Text">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+          <button type="button" class="btn btn-icon-lg" id="btnBrowserPressEnter" aria-label="Press Enter" title="Press Enter">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="9 10 4 15 9 20" />
+              <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+            </svg>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Dialog -->
+  <div id="confirmModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" style="z-index: 1200;">
+    <div class="modal-panel" style="max-width: 420px;">
+      <div class="modal-header">
+        <h2 id="confirmModalTitle">Confirm</h2>
+        <button type="button" class="modal-close" id="btnCloseConfirmModal" aria-label="Close dialog" title="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p id="confirmModalMessage" style="color: var(--text-secondary); font-size: 14px;"></p>
+      </div>
+      <div class="modal-footer" style="justify-content: flex-end;">
+        <button type="button" class="btn btn-icon-md" id="btnConfirmCancel" aria-label="Cancel" title="Cancel">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+        <button type="button" class="btn btn-danger btn-icon-md" id="confirmModalOkBtn" aria-label="Confirm" title="Confirm">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="appToast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
