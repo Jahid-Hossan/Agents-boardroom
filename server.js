@@ -18,13 +18,34 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const MESSAGES_FILE = path.join(__dirname, 'messages.json');
-const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const RUNTIME_DIR = IS_VERCEL ? path.join(os.tmpdir(), 'muse-boardroom') : __dirname;
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (IS_VERCEL && !fs.existsSync(RUNTIME_DIR)) {
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
 }
+
+function resolveRuntimeJsonFile(filename) {
+  const bundled = path.join(__dirname, filename);
+  if (!IS_VERCEL) return bundled;
+  const runtimePath = path.join(RUNTIME_DIR, filename);
+  if (!fs.existsSync(runtimePath) && fs.existsSync(bundled)) {
+    try {
+      fs.copyFileSync(bundled, runtimePath);
+    } catch {}
+  }
+  return runtimePath;
+}
+
+const CONFIG_FILE = resolveRuntimeJsonFile('config.json');
+const MESSAGES_FILE = resolveRuntimeJsonFile('messages.json');
+const UPLOADS_DIR = IS_VERCEL ? path.join(RUNTIME_DIR, 'uploads') : path.join(__dirname, 'public', 'uploads');
+
+try {
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+} catch {}
 
 function loadJson(file, defaultVal) {
   try {
@@ -393,7 +414,7 @@ function generateDemoResponse(agent, prompt) {
   return `**[Offline Demo — ${agent.name}${roleStr}]** Received: "${cleanPrompt}".\n\nSwitch this agent to **Desktop Browser Session**, **Google Gemini API**, or **OpenAI / Groq** in **Manage Agents** to get real AI output.`;
 }
 
-const server = http.createServer(async (req, res) => {
+export async function requestHandler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || `localhost:${PORT}`}`);
   const pathname = url.pathname;
 
@@ -1111,18 +1132,23 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': contentType });
     res.end(content);
   });
-});
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Muse Boardroom active on http://0.0.0.0:${PORT}`);
-});
-
-async function shutdownGracefully() {
-  try {
-    await inAppBrowser.closeAll();
-  } catch {}
-  process.exit(0);
 }
 
-process.on('SIGINT', shutdownGracefully);
-process.on('SIGTERM', shutdownGracefully);
+export default requestHandler;
+
+if (!IS_VERCEL) {
+  const server = http.createServer(requestHandler);
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Muse Boardroom active on http://0.0.0.0:${PORT}`);
+  });
+
+  async function shutdownGracefully() {
+    try {
+      await inAppBrowser.closeAll();
+    } catch {}
+    process.exit(0);
+  }
+
+  process.on('SIGINT', shutdownGracefully);
+  process.on('SIGTERM', shutdownGracefully);
+}
