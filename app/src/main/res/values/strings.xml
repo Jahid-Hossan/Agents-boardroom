@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Muse Boardroom</string>
+    <string name="boardroom_broadcast">Boardroom Broadcast</string>
+    <string name="direct_chat">Direct Chat</string>
+    <string name="in_app_browser">In-App Browser</string>
+    <string name="manage_agents">Manage Agents</string>
+    <string name="clear_chat">Clear Chat</string>
+    <string name="connected_agents">Connected Agents</string>
+    <string name="in_app_connector">In-App Browser Connector</string>
+    <string name="connector_help">Tap the globe icon on any agent to sign in inside this app. Sessions stay saved across restarts.</string>
+    <string name="onboarding_title">Open In-App Browser &amp; Connect Your AIs</string>
+    <string name="onboarding_body">Sign into Muse AI, Gemini, ChatGPT, and Grok right inside this app—or run Gemini AI directly with built-in Firebase AI Logic and custom API agents.</string>
+    <string name="prompt_placeholder_boardroom">Type a prompt for your agents (or @AgentName)...</string>
+    <string name="confirm_clear_title">Clear Chat History</string>
+    <string name="confirm_clear_body">Clear all messages from the boardroom?</string>
+    <string name="confirm_remove_agent_title">Remove Agent</string>
+</resources>

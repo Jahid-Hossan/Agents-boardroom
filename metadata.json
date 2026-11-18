@@ -1,0 +1,6 @@
+{
+  "name": "Muse Boardroom",
+  "description": "Multi-Agent AI Command Center connecting Muse AI, Gemini, ChatGPT, Grok, and API agents with boardroom orchestration and direct chat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
