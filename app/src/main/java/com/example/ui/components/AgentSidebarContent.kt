@@ -22,9 +22,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,8 +35,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +59,7 @@ import com.example.data.model.AgentProvider
 import com.example.data.model.BoardroomSettings
 import com.example.data.model.ChatViewMode
 import com.example.data.model.InAppBrowserStatus
+import com.example.data.model.MuseConnectionStatus
 import com.example.data.model.resolveAgentAvailability
 import com.example.engine.InAppBrowserCoordinator
 import com.example.ui.theme.AmberAccent
@@ -74,6 +82,14 @@ fun AgentSidebarContent(
     browserStatuses: Map<String, InAppBrowserStatus>,
     agentStatuses: Map<String, AgentAvailabilityStatus>,
     busyDetails: Map<String, String>,
+    agentErrorDetails: Map<String, String> = emptyMap(),
+    bridgeSseConnected: Boolean = false,
+    embeddedBridgeRunning: Boolean = false,
+    embeddedBridgeUrl: String = "",
+    isCreatingBridgeBot: Boolean = false,
+    museConnectionStatus: MuseConnectionStatus = MuseConnectionStatus(),
+    storedAuthTokenCount: Int = 0,
+    onRefreshMuseConnection: () -> Unit = {},
     viewMode: ChatViewMode,
     selectedDirectAgentId: String?,
     onOpenBrowser: (String?) -> Unit,
@@ -81,6 +97,11 @@ fun AgentSidebarContent(
     onSelectDirectAgent: (String) -> Unit,
     onEditAgent: (String) -> Unit,
     onDeleteAgent: (AgentConfig) -> Unit,
+    onToggleEnabled: (String, Boolean) -> Unit = { _, _ -> },
+    onToggleBroadcastSelected: (String, Boolean) -> Unit = { _, _ -> },
+    onInitBridgeBot: (String) -> Unit = {},
+    onOpenBotsScreen: () -> Unit = {},
+    onCreateBotBridge: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val onlineCount = agents.count { agent ->
@@ -90,7 +111,10 @@ fun AgentSidebarContent(
     val busyCount = agents.count { agent ->
         agentStatuses[agent.id] == AgentAvailabilityStatus.BUSY
     }
-    val offlineCount = (agents.size - onlineCount - busyCount).coerceAtLeast(0)
+    val needsAuthCount = agents.count { agent ->
+        agentStatuses[agent.id] == AgentAvailabilityStatus.NEEDS_AUTH
+    }
+    val offlineCount = (agents.size - onlineCount - busyCount - needsAuthCount).coerceAtLeast(0)
 
     Column(
         modifier = modifier
@@ -166,12 +190,63 @@ fun AgentSidebarContent(
                         val summaryParts = buildList {
                             add("$onlineCount online")
                             if (busyCount > 0) add("$busyCount busy")
+                            if (needsAuthCount > 0) add("$needsAuthCount needs auth")
                             if (offlineCount > 0) add("$offlineCount offline")
                         }
                         Text(
                             text = summaryParts.joinToString(" · "),
                             style = MaterialTheme.typography.labelMedium,
                             color = TextPrimary
+                        )
+                    }
+                    if (embeddedBridgeRunning || settings.bridgeServerUrl.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Hub,
+                                contentDescription = null,
+                                tint = if (embeddedBridgeRunning || bridgeSseConnected) Color(0xFF10B981) else AmberAccent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = when {
+                                    embeddedBridgeRunning && embeddedBridgeUrl.isNotBlank() ->
+                                        "In-App Bridge Live (${embeddedBridgeUrl.removePrefix("http://")})"
+                                    bridgeSseConnected -> "Multi-Bot Bridge SSE live"
+                                    else -> "Bridge configured · Tap Bots to manage"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = onCreateBotBridge,
+                        enabled = !isCreatingBridgeBot,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AmberAccent,
+                            contentColor = AmberOnAccent
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("sidebar_create_bridge_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Hub,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isCreatingBridgeBot) "Connecting..." else stringResource(R.string.create_bot_bridge),
+                            style = MaterialTheme.typography.labelLarge
                         )
                     }
                     Text(
@@ -181,6 +256,13 @@ fun AgentSidebarContent(
                     )
                 }
             }
+
+            MuseConnectionStatusCard(
+                status = museConnectionStatus,
+                storedTokenCount = storedAuthTokenCount,
+                compact = true,
+                onRefreshConnection = onRefreshMuseConnection
+            )
         }
 
         HorizontalDivider(color = BorderSubtle)
@@ -199,17 +281,40 @@ fun AgentSidebarContent(
                 color = TextMuted,
                 fontWeight = FontWeight.SemiBold
             )
-            IconButton(
-                onClick = onAddAgent,
-                modifier = Modifier
-                    .size(48.dp)
-                    .testTag("sidebar_add_agent_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = "Add agent",
-                    tint = AmberAccent
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    onClick = onOpenBotsScreen,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("sidebar_bots_screen_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Hub,
+                        contentDescription = null,
+                        tint = AmberAccent,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Bots",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextPrimary
+                    )
+                }
+                IconButton(
+                    onClick = onAddAgent,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("sidebar_add_agent_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Add,
+                        contentDescription = "Add agent",
+                        tint = AmberAccent
+                    )
+                }
             }
         }
 
@@ -227,6 +332,7 @@ fun AgentSidebarContent(
                 val availability = agentStatuses[agent.id]
                     ?: resolveAgentAvailability(agent, status, isBusy = false)
                 val busyDetail = busyDetails[agent.id]
+                val errorDetail = agentErrorDetails[agent.id]
                 val isSupervisor = agent.isSupervisor || settings.supervisorAgentId == agent.id
                 AgentRosterCard(
                     agent = agent,
@@ -235,11 +341,15 @@ fun AgentSidebarContent(
                     browserStatus = status,
                     availability = availability,
                     busyDetail = busyDetail,
+                    errorDetail = errorDetail,
                     canDelete = agents.size > 1,
                     onClick = { onSelectDirectAgent(agent.id) },
                     onOpenBrowser = { onOpenBrowser(agent.id) },
                     onEdit = { onEditAgent(agent.id) },
-                    onDelete = { onDeleteAgent(agent) }
+                    onDelete = { onDeleteAgent(agent) },
+                    onToggleEnabled = { enabled -> onToggleEnabled(agent.id, enabled) },
+                    onToggleBroadcastSelected = { selected -> onToggleBroadcastSelected(agent.id, selected) },
+                    onInitBridgeBot = { onInitBridgeBot(agent.id) }
                 )
             }
         }
@@ -254,17 +364,32 @@ private fun AgentRosterCard(
     browserStatus: InAppBrowserStatus?,
     availability: AgentAvailabilityStatus,
     busyDetail: String?,
+    errorDetail: String?,
     canDelete: Boolean,
     onClick: () -> Unit,
     onOpenBrowser: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onToggleEnabled: (Boolean) -> Unit,
+    onToggleBroadcastSelected: (Boolean) -> Unit,
+    onInitBridgeBot: () -> Unit
 ) {
     val accent = parseHexColor(agent.colorHex)
-    val subtitleText = if (availability == AgentAvailabilityStatus.BUSY) {
-        busyDetail?.takeIf { it.isNotBlank() } ?: "Processing prompt..."
-    } else {
-        when (agent.provider) {
+    val subtitleText = when {
+        !agent.enabled -> "Disabled"
+        availability == AgentAvailabilityStatus.BUSY ->
+            busyDetail?.takeIf { it.isNotBlank() } ?: "Processing prompt..."
+        availability == AgentAvailabilityStatus.ERROR && !errorDetail.isNullOrBlank() ->
+            errorDetail
+        else -> when (agent.provider) {
+            AgentProvider.MUSE_BRIDGE -> {
+                val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                when (availability) {
+                    AgentAvailabilityStatus.NEEDS_AUTH -> "Bridge ($remoteId) · Needs Auth"
+                    AgentAvailabilityStatus.ONLINE -> "Bridge ($remoteId) · Connected"
+                    else -> "Bridge ($remoteId) · Sync to connect"
+                }
+            }
             AgentProvider.INAPP_BROWSER -> {
                 val host = InAppBrowserCoordinator.hostOf(agent.customUrl).ifBlank { "Web" }
                 when {
@@ -398,63 +523,116 @@ private fun AgentRosterCard(
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick = onClick,
-                modifier = Modifier
-                    .size(48.dp)
-                    .testTag("agent_chat_button_${agent.id}")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Chat,
-                    contentDescription = "Direct chat with ${agent.name}",
-                    tint = if (isSelected) AmberAccent else TextSecondary,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            if (agent.provider == AgentProvider.INAPP_BROWSER) {
                 IconButton(
-                    onClick = onOpenBrowser,
+                    onClick = { onToggleBroadcastSelected(!agent.selectedForBroadcast) },
+                    enabled = agent.enabled,
                     modifier = Modifier
                         .size(48.dp)
-                        .testTag("agent_browser_button_${agent.id}")
+                        .testTag("agent_broadcast_toggle_${agent.id}")
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Language,
-                        contentDescription = "Open ${agent.name} in In-App Browser",
-                        tint = AmberAccent,
+                        imageVector = if (agent.selectedForBroadcast && agent.enabled) {
+                            Icons.Filled.CheckCircle
+                        } else {
+                            Icons.Filled.RadioButtonUnchecked
+                        },
+                        contentDescription = if (agent.selectedForBroadcast) {
+                            "Included in broadcast"
+                        } else {
+                            "Excluded from broadcast"
+                        },
+                        tint = if (agent.selectedForBroadcast && agent.enabled) AmberAccent else TextMuted,
                         modifier = Modifier.size(18.dp)
                     )
                 }
-            }
-            IconButton(
-                onClick = onEdit,
-                modifier = Modifier
-                    .size(48.dp)
-                    .testTag("agent_edit_button_${agent.id}")
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Edit,
-                    contentDescription = "Edit ${agent.name}",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(18.dp)
+
+                Switch(
+                    checked = agent.enabled,
+                    onCheckedChange = onToggleEnabled,
+                    colors = SwitchDefaults.colors(checkedThumbColor = AmberAccent),
+                    modifier = Modifier.testTag("agent_enable_toggle_${agent.id}")
                 )
             }
-            if (canDelete) {
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(
-                    onClick = onDelete,
+                    onClick = onClick,
                     modifier = Modifier
                         .size(48.dp)
-                        .testTag("agent_delete_button_${agent.id}")
+                        .testTag("agent_chat_button_${agent.id}")
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.DeleteOutline,
-                        contentDescription = "Remove ${agent.name}",
-                        tint = Color(0xFFEF4444),
+                        imageVector = Icons.AutoMirrored.Filled.Chat,
+                        contentDescription = "Direct chat with ${agent.name}",
+                        tint = if (isSelected) AmberAccent else TextSecondary,
                         modifier = Modifier.size(18.dp)
                     )
+                }
+                if (agent.provider == AgentProvider.INAPP_BROWSER) {
+                    IconButton(
+                        onClick = onOpenBrowser,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("agent_browser_button_${agent.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Language,
+                            contentDescription = "Open ${agent.name} in In-App Browser",
+                            tint = AmberAccent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                    IconButton(
+                        onClick = onInitBridgeBot,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("agent_bridge_init_button_${agent.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Hub,
+                            contentDescription = "Initialize ${agent.name} Bridge session",
+                            tint = AmberAccent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onEdit,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("agent_edit_button_${agent.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "Edit ${agent.name}",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                if (canDelete) {
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("agent_delete_button_${agent.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = "Remove ${agent.name}",
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

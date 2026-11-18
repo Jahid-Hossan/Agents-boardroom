@@ -84,6 +84,9 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
+    implementation(libs.socket.io.client) {
+        exclude(group = "org.json", module = "json")
+    }
     implementation(libs.coil.compose)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

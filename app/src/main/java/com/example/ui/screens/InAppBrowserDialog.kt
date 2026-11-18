@@ -92,7 +92,7 @@ fun InAppBrowserDialog(
     var urlInput by remember(activeAgent?.id) {
         mutableStateOf(
             status?.currentUrl?.takeIf { it.isNotBlank() }
-                ?: activeAgent?.customUrl.orEmpty()
+                ?: activeAgent?.let { InAppBrowserCoordinator.effectiveBrowserUrl(it) }.orEmpty()
         )
     }
     var quickText by remember { mutableStateOf("") }
@@ -101,7 +101,7 @@ fun InAppBrowserDialog(
     LaunchedEffect(activeAgent?.id) {
         if (activeAgent != null) {
             urlInput = statuses[activeAgent.id]?.currentUrl?.takeIf { it.isNotBlank() }
-                ?: activeAgent.customUrl
+                ?: InAppBrowserCoordinator.effectiveBrowserUrl(activeAgent)
             activeWebView = coordinator.getOrCreateWebView(activeAgent)
         }
     }

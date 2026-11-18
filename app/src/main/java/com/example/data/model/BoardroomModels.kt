@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 enum class AgentProvider(val id: String, val displayLabel: String) {
+    MUSE_BRIDGE("muse-bridge", "Multi-Bot Bridge"),
     INAPP_BROWSER("inapp-browser", "In-App Browser"),
     GEMINI("gemini", "Gemini AI"),
     OPENAI("openai", "OpenAI / Custom API"),
@@ -47,7 +48,10 @@ data class AgentConfig(
     val endpoint: String = "",
     val systemPrompt: String = "",
     val isSupervisor: Boolean = false,
-    val sortOrder: Int = 0
+    val sortOrder: Int = 0,
+    val enabled: Boolean = true,
+    val selectedForBroadcast: Boolean = true,
+    val bridgeBotId: String = ""
 )
 
 data class AttachmentData(
@@ -90,7 +94,10 @@ data class BoardroomMessage(
     val isSupervisor: Boolean = false,
     val collaborationRole: CollaborationRole = CollaborationRole.NONE,
     val fromAgentName: String? = null,
-    val timestampMillis: Long = System.currentTimeMillis()
+    val timestampMillis: Long = System.currentTimeMillis(),
+    val parentMessageId: String? = null,
+    val deliveryTaskId: String? = null,
+    val dispatchBatchId: String? = null
 )
 
 data class InAppBrowserStatus(
@@ -106,31 +113,48 @@ data class InAppBrowserStatus(
 enum class AgentAvailabilityStatus(val label: String) {
     ONLINE("Online"),
     BUSY("Busy"),
-    OFFLINE("Offline")
+    OFFLINE("Offline"),
+    NEEDS_AUTH("Needs Auth"),
+    ERROR("Error");
+
+    companion object {
+        fun fromRemote(raw: String?): AgentAvailabilityStatus =
+            when (raw?.trim()?.lowercase()) {
+                "online" -> ONLINE
+                "busy" -> BUSY
+                "needs_auth", "needsauth", "needs-auth" -> NEEDS_AUTH
+                "error", "failed" -> ERROR
+                else -> OFFLINE
+            }
+    }
 }
 
 fun resolveAgentAvailability(
     agent: AgentConfig,
     browserStatus: InAppBrowserStatus?,
     isBusy: Boolean,
-    isNetworkAvailable: Boolean = true
+    isNetworkAvailable: Boolean = true,
+    remoteBridgeStatus: AgentAvailabilityStatus? = null,
+    errorMessage: String? = null
 ): AgentAvailabilityStatus {
+    if (!agent.enabled) return AgentAvailabilityStatus.OFFLINE
     if (isBusy) return AgentAvailabilityStatus.BUSY
+    if (!errorMessage.isNullOrBlank()) return AgentAvailabilityStatus.ERROR
     if (agent.provider == AgentProvider.SIMULATION) return AgentAvailabilityStatus.OFFLINE
     if (!isNetworkAvailable) return AgentAvailabilityStatus.OFFLINE
 
     return when (agent.provider) {
+        AgentProvider.MUSE_BRIDGE -> remoteBridgeStatus ?: AgentAvailabilityStatus.OFFLINE
         AgentProvider.GEMINI -> AgentAvailabilityStatus.ONLINE
         AgentProvider.OPENAI ->
-            if (agent.apiKey.isNotBlank()) AgentAvailabilityStatus.ONLINE else AgentAvailabilityStatus.OFFLINE
+            if (agent.apiKey.isNotBlank()) AgentAvailabilityStatus.ONLINE else AgentAvailabilityStatus.NEEDS_AUTH
         AgentProvider.DOCKER_WEB ->
             if (agent.customUrl.isNotBlank()) AgentAvailabilityStatus.ONLINE else AgentAvailabilityStatus.OFFLINE
-        AgentProvider.INAPP_BROWSER ->
-            if (browserStatus?.ready == true || browserStatus?.hasSavedProfile == true) {
-                AgentAvailabilityStatus.ONLINE
-            } else {
-                AgentAvailabilityStatus.OFFLINE
-            }
+        AgentProvider.INAPP_BROWSER -> when {
+            browserStatus?.needsLogin == true -> AgentAvailabilityStatus.NEEDS_AUTH
+            browserStatus?.ready == true || browserStatus?.hasSavedProfile == true -> AgentAvailabilityStatus.ONLINE
+            else -> AgentAvailabilityStatus.OFFLINE
+        }
         AgentProvider.SIMULATION -> AgentAvailabilityStatus.OFFLINE
     }
 }
@@ -140,7 +164,29 @@ data class BoardroomSettings(
     val ceoName: String = "You",
     val supervisorAgentId: String? = null,
     val collaborationEnabled: Boolean = true,
-    val maxCollaborationHops: Int = 3
+    val maxCollaborationHops: Int = 3,
+    val bridgeServerUrl: String = "",
+    val bridgeAuthToken: String = ""
+)
+
+data class BridgeAuthTokenRecord(
+    val id: String,
+    val botId: String,
+    val serverUrl: String,
+    val tokenPreview: String,
+    val tokenHash: String,
+    val isActive: Boolean = true,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val lastUsedAtMillis: Long = System.currentTimeMillis(),
+    val expiresAtMillis: Long? = null
+)
+
+data class MuseConnectionStatus(
+    val isConnected: Boolean = false,
+    val isRefreshing: Boolean = false,
+    val socketConnected: Boolean = false,
+    val statusDetail: String = "Disconnected from Muse AI",
+    val lastUpdatedMillis: Long = 0L
 )
 
 data class AiPreset(

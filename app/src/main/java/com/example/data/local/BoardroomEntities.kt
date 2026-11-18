@@ -1,12 +1,14 @@
 package com.example.data.local
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.data.model.AgentConfig
 import com.example.data.model.AgentProvider
 import com.example.data.model.AttachmentData
 import com.example.data.model.BoardroomMessage
 import com.example.data.model.BoardroomSettings
+import com.example.data.model.BridgeAuthTokenRecord
 import com.example.data.model.CollaborationRole
 
 @Entity(tableName = "agents")
@@ -23,7 +25,10 @@ data class AgentEntity(
     val endpoint: String,
     val systemPrompt: String,
     val isSupervisor: Boolean,
-    val sortOrder: Int
+    val sortOrder: Int,
+    val enabled: Boolean = true,
+    val selectedForBroadcast: Boolean = true,
+    val bridgeBotId: String = ""
 )
 
 @Entity(tableName = "messages")
@@ -50,7 +55,10 @@ data class MessageEntity(
     val isSupervisor: Boolean = false,
     val collaborationRoleId: String = "none",
     val fromAgentName: String? = null,
-    val timestampMillis: Long
+    val timestampMillis: Long,
+    val parentMessageId: String? = null,
+    val deliveryTaskId: String? = null,
+    val dispatchBatchId: String? = null
 )
 
 @Entity(tableName = "boardroom_settings")
@@ -60,7 +68,9 @@ data class SettingsEntity(
     val ceoName: String,
     val supervisorAgentId: String?,
     val collaborationEnabled: Boolean,
-    val maxCollaborationHops: Int
+    val maxCollaborationHops: Int,
+    val bridgeServerUrl: String = "",
+    val bridgeAuthToken: String = ""
 )
 
 fun AgentEntity.toDomain(): AgentConfig = AgentConfig(
@@ -76,7 +86,10 @@ fun AgentEntity.toDomain(): AgentConfig = AgentConfig(
     endpoint = endpoint,
     systemPrompt = systemPrompt,
     isSupervisor = isSupervisor,
-    sortOrder = sortOrder
+    sortOrder = sortOrder,
+    enabled = enabled,
+    selectedForBroadcast = selectedForBroadcast,
+    bridgeBotId = bridgeBotId
 )
 
 fun AgentConfig.toEntity(): AgentEntity = AgentEntity(
@@ -92,7 +105,10 @@ fun AgentConfig.toEntity(): AgentEntity = AgentEntity(
     endpoint = endpoint,
     systemPrompt = systemPrompt,
     isSupervisor = isSupervisor,
-    sortOrder = sortOrder
+    sortOrder = sortOrder,
+    enabled = enabled,
+    selectedForBroadcast = selectedForBroadcast,
+    bridgeBotId = bridgeBotId
 )
 
 fun MessageEntity.toDomain(): BoardroomMessage = BoardroomMessage(
@@ -122,7 +138,10 @@ fun MessageEntity.toDomain(): BoardroomMessage = BoardroomMessage(
     isSupervisor = isSupervisor,
     collaborationRole = CollaborationRole.fromId(collaborationRoleId),
     fromAgentName = fromAgentName,
-    timestampMillis = timestampMillis
+    timestampMillis = timestampMillis,
+    parentMessageId = parentMessageId,
+    deliveryTaskId = deliveryTaskId,
+    dispatchBatchId = dispatchBatchId
 )
 
 fun BoardroomMessage.toEntity(): MessageEntity = MessageEntity(
@@ -148,7 +167,10 @@ fun BoardroomMessage.toEntity(): MessageEntity = MessageEntity(
     isSupervisor = isSupervisor,
     collaborationRoleId = collaborationRole.id,
     fromAgentName = fromAgentName,
-    timestampMillis = timestampMillis
+    timestampMillis = timestampMillis,
+    parentMessageId = parentMessageId,
+    deliveryTaskId = deliveryTaskId,
+    dispatchBatchId = dispatchBatchId
 )
 
 fun SettingsEntity.toDomain(): BoardroomSettings = BoardroomSettings(
@@ -156,7 +178,9 @@ fun SettingsEntity.toDomain(): BoardroomSettings = BoardroomSettings(
     ceoName = ceoName,
     supervisorAgentId = supervisorAgentId,
     collaborationEnabled = collaborationEnabled,
-    maxCollaborationHops = maxCollaborationHops
+    maxCollaborationHops = maxCollaborationHops,
+    bridgeServerUrl = bridgeServerUrl,
+    bridgeAuthToken = bridgeAuthToken
 )
 
 fun BoardroomSettings.toEntity(): SettingsEntity = SettingsEntity(
@@ -165,5 +189,40 @@ fun BoardroomSettings.toEntity(): SettingsEntity = SettingsEntity(
     ceoName = ceoName,
     supervisorAgentId = supervisorAgentId,
     collaborationEnabled = collaborationEnabled,
-    maxCollaborationHops = maxCollaborationHops
+    maxCollaborationHops = maxCollaborationHops,
+    bridgeServerUrl = bridgeServerUrl,
+    bridgeAuthToken = bridgeAuthToken
+)
+
+@Entity(
+    tableName = "bridge_auth_tokens",
+    indices = [
+        Index(value = ["botId"]),
+        Index(value = ["isActive"]),
+        Index(value = ["tokenHash"])
+    ]
+)
+data class BridgeAuthTokenEntity(
+    @PrimaryKey val id: String,
+    val botId: String,
+    val serverUrl: String,
+    val encryptedToken: String,
+    val tokenHash: String,
+    val tokenPreview: String,
+    val isActive: Boolean = true,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val lastUsedAtMillis: Long = System.currentTimeMillis(),
+    val expiresAtMillis: Long? = null
+)
+
+fun BridgeAuthTokenEntity.toDomain(): BridgeAuthTokenRecord = BridgeAuthTokenRecord(
+    id = id,
+    botId = botId,
+    serverUrl = serverUrl,
+    tokenPreview = tokenPreview,
+    tokenHash = tokenHash,
+    isActive = isActive,
+    createdAtMillis = createdAtMillis,
+    lastUsedAtMillis = lastUsedAtMillis,
+    expiresAtMillis = expiresAtMillis
 )

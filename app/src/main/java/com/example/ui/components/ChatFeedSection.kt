@@ -90,6 +90,7 @@ fun ChatFeedSection(
     agents: List<AgentConfig>,
     agentStatuses: Map<String, AgentAvailabilityStatus>,
     busyDetails: Map<String, String>,
+    streamingDrafts: Map<String, String> = emptyMap(),
     messages: List<BoardroomMessage>,
     viewMode: ChatViewMode,
     directAgent: AgentConfig?,
@@ -223,6 +224,27 @@ fun ChatFeedSection(
 
             items(visibleMessages, key = { it.id }) { msg ->
                 MessageCard(message = msg)
+            }
+
+            streamingDrafts.entries.forEach { (agentId, draftText) ->
+                val agent = agents.firstOrNull { it.id == agentId }
+                if (agent != null && draftText.isNotBlank() &&
+                    (viewMode == ChatViewMode.BOARDROOM || directAgent?.id == agentId)
+                ) {
+                    item(key = "stream_draft_$agentId") {
+                        MessageCard(
+                            message = BoardroomMessage(
+                                id = "draft-$agentId",
+                                sender = agent.id,
+                                role = "${agent.role.ifBlank { agent.provider.displayLabel }} · Live Stream",
+                                senderName = agent.name,
+                                avatar = agent.avatar,
+                                colorHex = agent.colorHex,
+                                text = draftText
+                            )
+                        )
+                    }
+                }
             }
 
             if (!thinkingStatus.isNullOrBlank()) {
@@ -423,7 +445,11 @@ private fun CollaborationBadgeRow(message: BoardroomMessage) {
             "Handoff ${fromPart}Round ${message.hop}/${message.maxHops}" to false
         }
         CollaborationRole.NONE, CollaborationRole.PRIMARY -> {
-            if (message.isSupervisor && message.sender != "ceo") "CEO / Supervisor" to true else null
+            when {
+                message.isSupervisor && message.sender != "ceo" -> "CEO / Supervisor" to true
+                !message.deliveryTaskId.isNullOrBlank() -> "Bridge · Task ${message.deliveryTaskId.take(10)}" to false
+                else -> null
+            }
         }
     }
 

@@ -15,4 +15,17 @@
     <string name="confirm_clear_title">Clear Chat History</string>
     <string name="confirm_clear_body">Clear all messages from the boardroom?</string>
     <string name="confirm_remove_agent_title">Remove Agent</string>
+    <string name="configured_bots">Configured Bots</string>
+    <string name="broadcast_stream_title">Broadcast Stream Targets</string>
+    <string name="broadcast_stream_toggle_label">Broadcast Stream</string>
+    <string name="create_bot_bridge">Create Bot / Bridge</string>
+    <string name="connect_muse_ai">Connect to Muse AI</string>
+    <string name="muse_connection_title">Muse AI Connection</string>
+    <string name="muse_status_connected">Connected</string>
+    <string name="muse_status_disconnected">Disconnected</string>
+    <string name="refresh_connection">Refresh</string>
+    <string name="refreshing_connection">Checking…</string>
+    <string name="refresh_muse_connection">Refresh Muse AI connection</string>
+    <string name="socket_io_live">Socket.IO Live</string>
+    <string name="socket_io_offline">Socket.IO Idle</string>
 </resources>

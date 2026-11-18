@@ -14,6 +14,7 @@ import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.BoardroomDatabase
+import com.example.data.local.TokenCryptoManager
 import com.example.data.model.AgentAvailabilityStatus
 import com.example.data.model.AgentConfig
 import com.example.data.model.AgentProvider
@@ -23,12 +24,20 @@ import com.example.data.model.BoardroomSettings
 import com.example.data.model.ChatViewMode
 import com.example.data.model.CollaborationRole
 import com.example.data.model.InAppBrowserStatus
+import com.example.data.model.MuseConnectionStatus
 import com.example.data.model.resolveAgentAvailability
 import com.example.data.repository.BoardroomRepository
 import com.example.engine.AgentCollaboration
 import com.example.engine.AgentInferenceService
+import com.example.engine.BridgeSocketService
+import com.example.engine.BridgeSocketState
+import com.example.engine.BridgeSseEventData
+import com.example.engine.EmbeddedBridgeBotRecord
+import com.example.engine.EmbeddedBridgeExecutor
+import com.example.engine.EmbeddedBridgeServer
 import com.example.engine.InAppBrowserCoordinator
 import com.example.engine.IncomingHandoffContext
+import com.example.engine.MultiBotBridgeClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,12 +49,22 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+
+data class CreatedBridgeCredentials(
+    val agentId: String,
+    val botId: String,
+    val botName: String,
+    val serverUrl: String,
+    val token: String,
+    val targetUrl: String
+)
 
 data class BoardroomUiState(
     val agents: List<AgentConfig> = emptyList(),
@@ -54,6 +73,8 @@ data class BoardroomUiState(
     val browserStatuses: Map<String, InAppBrowserStatus> = emptyMap(),
     val agentStatuses: Map<String, AgentAvailabilityStatus> = emptyMap(),
     val busyAgentDetails: Map<String, String> = emptyMap(),
+    val agentErrorDetails: Map<String, String> = emptyMap(),
+    val streamingDrafts: Map<String, String> = emptyMap(),
     val isNetworkAvailable: Boolean = true,
     val viewMode: ChatViewMode = ChatViewMode.BOARDROOM,
     val selectedDirectAgentId: String? = null,
@@ -68,17 +89,83 @@ data class BoardroomUiState(
     val manageSelectedAgentId: String? = null,
     val showInAppBrowserDialog: Boolean = false,
     val activeBrowserAgentId: String? = null,
+    val showBotsScreen: Boolean = false,
     val webhookTestResult: String? = null,
     val isTestingWebhook: Boolean = false,
+    val bridgeSyncResult: String? = null,
+    val isSyncingBridge: Boolean = false,
+    val bridgeSseConnected: Boolean = false,
+    val embeddedBridgeRunning: Boolean = false,
+    val embeddedBridgeUrl: String = "",
+    val isCreatingBridgeBot: Boolean = false,
+    val createdBridgeCredentials: CreatedBridgeCredentials? = null,
+    val museConnectionStatus: MuseConnectionStatus = MuseConnectionStatus(),
+    val storedAuthTokenCount: Int = 0,
     val snackbarMessage: String? = null
 )
 
 class BoardroomViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = BoardroomDatabase.getInstance(application)
-    private val repository = BoardroomRepository(database.boardroomDao())
+    private val tokenCryptoManager = TokenCryptoManager(application)
+    private val repository = BoardroomRepository(
+        dao = database.boardroomDao(),
+        tokenDao = database.bridgeAuthTokenDao(),
+        cryptoManager = tokenCryptoManager
+    )
     val browserCoordinator = InAppBrowserCoordinator(application)
     private val inferenceService = AgentInferenceService(application, browserCoordinator)
+    val bridgeSocketService = BridgeSocketService()
+
+    private val embeddedBridgeExecutor = object : EmbeddedBridgeExecutor {
+        override suspend fun checkBotSession(bot: EmbeddedBridgeBotRecord): Pair<AgentAvailabilityStatus, String> {
+            val agents = repository.agentsFlow.first()
+            val matchedAgent = agents.firstOrNull {
+                it.bridgeBotId == bot.botId || it.id == "bridge-${bot.botId}"
+            } ?: AgentConfig(
+                id = "bridge-${bot.botId}",
+                name = bot.displayName,
+                provider = AgentProvider.MUSE_BRIDGE,
+                endpoint = bot.targetUrl,
+                bridgeBotId = bot.botId
+            )
+            val status = browserCoordinator.statuses.value[matchedAgent.id]
+            val isReady = status?.ready == true || status?.hasSavedProfile == true
+            return when {
+                !bot.enabled -> AgentAvailabilityStatus.OFFLINE to "Disabled"
+                isReady -> AgentAvailabilityStatus.ONLINE to "Connected to ${bot.targetUrl}"
+                else -> AgentAvailabilityStatus.NEEDS_AUTH to "Bridge ready · Tap Connect to Muse AI"
+            }
+        }
+
+        override suspend fun executePrompt(
+            bot: EmbeddedBridgeBotRecord,
+            prompt: String,
+            onPartialDelta: suspend (String) -> Unit
+        ): Result<String> {
+            val agents = repository.agentsFlow.first()
+            val matchedAgent = agents.firstOrNull {
+                it.bridgeBotId == bot.botId || it.id == "bridge-${bot.botId}"
+            } ?: AgentConfig(
+                id = "bridge-${bot.botId}",
+                name = bot.displayName,
+                provider = AgentProvider.MUSE_BRIDGE,
+                endpoint = bot.targetUrl,
+                bridgeBotId = bot.botId
+            )
+            return runCatching {
+                val reply = browserCoordinator.sendPrompt(matchedAgent, prompt, attachment = null)
+                onPartialDelta(reply)
+                reply
+            }
+        }
+    }
+
+    val embeddedBridgeServer = EmbeddedBridgeServer(
+        context = application,
+        preferredPort = 8787,
+        executor = embeddedBridgeExecutor
+    )
 
     private val localState = MutableStateFlow(LocalUiControls())
 
@@ -101,12 +188,41 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
             ?: agents.firstOrNull()?.id
 
         val resolvedStatuses = agents.associate { agent ->
+            val remoteKey = agent.bridgeBotId.ifBlank { agent.id }
+            val remoteStatus = local.remoteBridgeStatuses[remoteKey] ?: local.remoteBridgeStatuses[agent.id]
+            val errMsg = local.agentErrorDetails[agent.id] ?: local.agentErrorDetails[remoteKey]
             agent.id to resolveAgentAvailability(
                 agent = agent,
                 browserStatus = statuses[agent.id],
                 isBusy = local.busyAgentDetails.containsKey(agent.id),
-                isNetworkAvailable = local.isNetworkAvailable
+                isNetworkAvailable = local.isNetworkAvailable,
+                remoteBridgeStatus = remoteStatus,
+                errorMessage = errMsg
             )
+        }
+
+        val hasOnlineMuseAgent = agents.any { agent ->
+            val targetsMuse = agent.id.equals("muse", ignoreCase = true) ||
+                agent.provider == AgentProvider.MUSE_BRIDGE ||
+                agent.customUrl.contains("muse.ai", ignoreCase = true) ||
+                agent.endpoint.contains("muse.ai", ignoreCase = true)
+            targetsMuse && resolvedStatuses[agent.id] == AgentAvailabilityStatus.ONLINE
+        }
+        val isMuseConnected = local.socketState.museConnected || hasOnlineMuseAgent
+        val museDetail = when {
+            isMuseConnected && local.socketState.connected ->
+                "Connected to Muse AI · Socket.IO real-time channel active"
+            isMuseConnected ->
+                "Connected to Muse AI session"
+            local.socketState.connected ->
+                local.socketState.museStatusDetail.ifBlank {
+                    "Bridge Socket.IO live · Sign in to Muse AI in Browser"
+                }
+            local.embeddedBridgeRunning ->
+                "Disconnected · Start or sign in to Muse AI and tap Refresh"
+            else ->
+                local.socketState.lastError?.takeIf { it.isNotBlank() }
+                    ?: "Disconnected from Muse AI"
         }
 
         BoardroomUiState(
@@ -116,6 +232,8 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
             browserStatuses = statuses,
             agentStatuses = resolvedStatuses,
             busyAgentDetails = local.busyAgentDetails,
+            agentErrorDetails = local.agentErrorDetails,
+            streamingDrafts = local.streamingDrafts,
             isNetworkAvailable = local.isNetworkAvailable,
             viewMode = local.viewMode,
             selectedDirectAgentId = validDirectId,
@@ -130,8 +248,24 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
             manageSelectedAgentId = validManageId,
             showInAppBrowserDialog = local.showInAppBrowserDialog,
             activeBrowserAgentId = validBrowserId,
+            showBotsScreen = local.showBotsScreen,
             webhookTestResult = local.webhookTestResult,
             isTestingWebhook = local.isTestingWebhook,
+            bridgeSyncResult = local.bridgeSyncResult,
+            isSyncingBridge = local.isSyncingBridge,
+            bridgeSseConnected = local.bridgeSseConnected || local.socketState.connected,
+            embeddedBridgeRunning = local.embeddedBridgeRunning,
+            embeddedBridgeUrl = local.embeddedBridgeUrl,
+            isCreatingBridgeBot = local.isCreatingBridgeBot,
+            createdBridgeCredentials = local.createdBridgeCredentials,
+            museConnectionStatus = MuseConnectionStatus(
+                isConnected = isMuseConnected,
+                isRefreshing = local.isRefreshingMuseConnection,
+                socketConnected = local.socketState.connected,
+                statusDetail = museDetail,
+                lastUpdatedMillis = maxOf(local.socketState.lastCheckedAtMillis, local.lastMuseRefreshMillis)
+            ),
+            storedAuthTokenCount = local.storedAuthTokenCount,
             snackbarMessage = local.snackbarMessage
         )
     }.stateIn(
@@ -141,6 +275,7 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
     )
 
     private var sendJob: Job? = null
+    private var sseJob: Job? = null
     private var recordingTimerJob: Job? = null
     private var mediaRecorder: MediaRecorder? = null
     private var recordingFile: File? = null
@@ -148,12 +283,171 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         registerNetworkMonitor()
+        viewModelScope.launch(Dispatchers.IO) {
+            // Migrate any legacy plaintext tokens from SharedPreferences into encrypted Room vault
+            val legacyTokens = embeddedBridgeServer.consumeLegacySharedPrefTokens()
+            legacyTokens.forEach { (rawToken, botId) ->
+                runCatching {
+                    repository.saveEncryptedAuthToken(
+                        botId = botId,
+                        serverUrl = "http://127.0.0.1:8787",
+                        rawToken = rawToken
+                    )
+                }
+            }
+            val activePairs = runCatching { repository.getDecryptedActiveTokens() }.getOrDefault(emptyList())
+            embeddedBridgeServer.restoreValidTokens(activePairs)
+            runCatching { embeddedBridgeServer.ensureStarted() }
+        }
+        viewModelScope.launch {
+            repository.activeAuthTokensFlow.collect { tokenRecords ->
+                localState.update { it.copy(storedAuthTokenCount = tokenRecords.size) }
+            }
+        }
+        viewModelScope.launch {
+            bridgeSocketService.state.collect { sock ->
+                localState.update { it.copy(socketState = sock) }
+            }
+        }
+        viewModelScope.launch {
+            bridgeSocketService.events.collect { event ->
+                handleBridgeSseEvent(event)
+            }
+        }
+        viewModelScope.launch {
+            embeddedBridgeServer.status.collect { srv ->
+                localState.update {
+                    it.copy(
+                        embeddedBridgeRunning = srv.running,
+                        embeddedBridgeUrl = srv.baseUrl
+                    )
+                }
+            }
+        }
         viewModelScope.launch {
             repository.ensureSeeded()
         }
         viewModelScope.launch {
             repository.agentsFlow.collect { agents ->
                 browserCoordinator.syncAgents(agents)
+            }
+        }
+        viewModelScope.launch {
+            browserCoordinator.statuses.collect { statusMap ->
+                val agents = uiState.value.agents
+                agents.filter { it.provider == AgentProvider.MUSE_BRIDGE }.forEach { agent ->
+                    val st = statusMap[agent.id] ?: return@forEach
+                    val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                    if (st.ready || st.hasSavedProfile || st.needsLogin) {
+                        embeddedBridgeServer.markBotBrowserReady(
+                            botId = remoteId,
+                            ready = st.ready || st.hasSavedProfile,
+                            needsLogin = st.needsLogin && !st.ready
+                        )
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            var activeUrl = ""
+            var activeToken = ""
+            combine(
+                repository.settingsFlow,
+                embeddedBridgeServer.status,
+                repository.activeAuthTokensFlow
+            ) { settings, srv, _ ->
+                val url = settings.bridgeServerUrl.trim().ifBlank {
+                    if (srv.running) srv.baseUrl else ""
+                }
+                val token = settings.bridgeAuthToken.trim().ifBlank {
+                    embeddedBridgeServer.getPrimaryToken().orEmpty()
+                }
+                url to token
+            }.collect { (url, token) ->
+                if (url != activeUrl || token != activeToken) {
+                    activeUrl = url
+                    activeToken = token
+                    bridgeSocketService.connect(url, token)
+                    restartBridgeSse(url, token)
+                }
+            }
+        }
+    }
+
+    private fun restartBridgeSse(serverUrl: String, authToken: String) {
+        sseJob?.cancel()
+        if (serverUrl.isBlank()) {
+            localState.update { it.copy(bridgeSseConnected = false) }
+            return
+        }
+        sseJob = viewModelScope.launch {
+            while (true) {
+                try {
+                    localState.update { it.copy(bridgeSseConnected = true) }
+                    inferenceService.bridgeClient.streamEvents(serverUrl, authToken).collect { event ->
+                        handleBridgeSseEvent(event)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    localState.update { it.copy(bridgeSseConnected = false) }
+                }
+                delay(4_000)
+            }
+        }
+    }
+
+    private fun handleBridgeSseEvent(event: BridgeSseEventData) {
+        val agents = uiState.value.agents
+        fun localAgentIdFor(botId: String): String =
+            agents.firstOrNull { it.bridgeBotId == botId || it.id == botId }?.id ?: botId
+
+        when (event) {
+            is BridgeSseEventData.BotStatusUpdated -> {
+                val localId = localAgentIdFor(event.botId)
+                localState.update { state ->
+                    val nextErrors = if (event.status == AgentAvailabilityStatus.ERROR && event.reason.isNotBlank()) {
+                        state.agentErrorDetails + (localId to event.reason)
+                    } else if (event.status == AgentAvailabilityStatus.ONLINE || event.status == AgentAvailabilityStatus.BUSY) {
+                        state.agentErrorDetails - localId
+                    } else {
+                        state.agentErrorDetails
+                    }
+                    state.copy(
+                        remoteBridgeStatuses = state.remoteBridgeStatuses + (event.botId to event.status),
+                        agentErrorDetails = nextErrors
+                    )
+                }
+            }
+            is BridgeSseEventData.TaskDelta -> {
+                val localId = localAgentIdFor(event.botId)
+                localState.update { state ->
+                    state.copy(
+                        streamingDrafts = state.streamingDrafts + (localId to event.fullTextSoFar),
+                        busyAgentDetails = state.busyAgentDetails + (localId to "Streaming...")
+                    )
+                }
+            }
+            is BridgeSseEventData.TaskTerminal -> {
+                val localId = localAgentIdFor(event.botId)
+                localState.update { state ->
+                    val nextErrors = if (!event.errorMessage.isNullOrBlank() && event.status != "needs_auth") {
+                        state.agentErrorDetails + (localId to event.errorMessage)
+                    } else {
+                        state.agentErrorDetails - localId
+                    }
+                    state.copy(
+                        streamingDrafts = state.streamingDrafts - localId,
+                        busyAgentDetails = state.busyAgentDetails - localId,
+                        agentErrorDetails = nextErrors
+                    )
+                }
+            }
+            is BridgeSseEventData.MessageCreated -> {
+                val localId = localAgentIdFor(event.botId)
+                localState.update { state ->
+                    state.copy(streamingDrafts = state.streamingDrafts - localId)
+                }
             }
         }
     }
@@ -277,6 +571,14 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun selectBrowserAgent(agentId: String) {
         localState.update { it.copy(activeBrowserAgentId = agentId) }
+    }
+
+    fun openBotsScreen() {
+        localState.update { it.copy(showBotsScreen = true) }
+    }
+
+    fun closeBotsScreen() {
+        localState.update { it.copy(showBotsScreen = false) }
     }
 
     fun consumeSnackbar() {
@@ -560,20 +862,27 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
                         )
                         listOf(supervisor to prompt)
                     }
-                    else -> agents.map { agent ->
-                        val prompt = if (settings.collaborationEnabled) {
-                            AgentCollaboration.buildCollaborationPrompt(
-                                userCommand = effectivePromptText,
-                                agent = agent,
-                                allAgents = agents,
-                                hop = 1,
-                                maxHops = maxHops
-                            )
-                        } else {
-                            effectivePromptText
+                    else -> agents
+                        .filter { it.enabled && it.selectedForBroadcast }
+                        .map { agent ->
+                            val prompt = if (settings.collaborationEnabled) {
+                                AgentCollaboration.buildCollaborationPrompt(
+                                    userCommand = effectivePromptText,
+                                    agent = agent,
+                                    allAgents = agents,
+                                    hop = 1,
+                                    maxHops = maxHops
+                                )
+                            } else {
+                                effectivePromptText
+                            }
+                            agent to prompt
                         }
-                        agent to prompt
-                    }
+                }
+
+                if (initialTargets.isEmpty()) {
+                    showMessage("Enable and select at least one bot/agent for broadcast.")
+                    return@launch
                 }
 
                 val targetNames = initialTargets.joinToString(", ") { it.first.name }
@@ -587,17 +896,45 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
 
+                // Partition Multi-Bot Bridge bots (which fan out via a single Bridge broadcast call)
+                // from local/direct agents (Gemini, In-App Browser, OpenAI, Webhook, Simulation).
+                val bridgeTargets = initialTargets.filter { (agent, _) ->
+                    agent.provider == AgentProvider.MUSE_BRIDGE &&
+                        (agent.customUrl.isNotBlank() || settings.bridgeServerUrl.isNotBlank())
+                }
+                val localTargets = initialTargets.filterNot { (agent, _) ->
+                    agent.provider == AgentProvider.MUSE_BRIDGE &&
+                        (agent.customUrl.isNotBlank() || settings.bridgeServerUrl.isNotBlank())
+                }
+
                 val round1Replies = coroutineScope {
-                    initialTargets.map { (agent, prompt) ->
+                    val localJobs = localTargets.map { (agent, prompt) ->
                         async {
+                            localState.update { st ->
+                                st.copy(agentErrorDetails = st.agentErrorDetails - agent.id)
+                            }
                             setAgentBusy(
                                 agent.id,
                                 if (supervisorDelegationOnly) "Delegating..." else "Replying..."
                             )
                             val replyText = try {
-                                inferenceService.invokeAgent(agent, prompt, attachment)
+                                inferenceService.invokeAgent(
+                                    agent = agent,
+                                    promptText = prompt,
+                                    attachment = attachment,
+                                    bridgeServerUrl = settings.bridgeServerUrl,
+                                    bridgeAuthToken = settings.bridgeAuthToken,
+                                    parentMessageId = userMessage.id
+                                )
                             } finally {
                                 clearAgentBusy(agent.id)
+                            }
+                            if (AgentCollaboration.isErrorOrSetupReply(replyText) &&
+                                replyText.contains("error", ignoreCase = true)
+                            ) {
+                                localState.update { st ->
+                                    st.copy(agentErrorDetails = st.agentErrorDetails + (agent.id to replyText.take(120)))
+                                }
                             }
                             val handoffsFound = if (settings.collaborationEnabled) {
                                 AgentCollaboration.parseAgentHandoffs(replyText, agents, agent.id)
@@ -621,6 +958,7 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
                                 targetAgentId = rootTargetId,
                                 rootTargetAgentId = rootTargetId,
                                 rootMessageId = userMessage.id,
+                                parentMessageId = userMessage.id,
                                 hop = 1,
                                 maxHops = maxHops,
                                 isSupervisor = agent.isSupervisor,
@@ -630,7 +968,129 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
                             repository.insertMessage(msg)
                             msg
                         }
-                    }.awaitAll()
+                    }
+
+                    val groupedBridge = bridgeTargets.groupBy { (agent, _) ->
+                        val url = agent.customUrl.trim().ifBlank { settings.bridgeServerUrl.trim() }
+                        val token = agent.apiKey.trim().ifBlank { settings.bridgeAuthToken.trim() }
+                        url to token
+                    }
+
+                    val bridgeJobs = groupedBridge.entries.map { (endpointPair, group) ->
+                        async {
+                            val (serverUrl, authToken) = endpointPair
+                            group.forEach { (agent, _) ->
+                                localState.update { st ->
+                                    st.copy(agentErrorDetails = st.agentErrorDetails - agent.id)
+                                }
+                                setAgentBusy(agent.id, "Bridge...")
+                            }
+                            val targetBotIds = group.map { (agent, _) ->
+                                agent.bridgeBotId.ifBlank { agent.id }
+                            }
+                            val batchResult = try {
+                                inferenceService.bridgeClient.dispatchBroadcast(
+                                    serverUrl = serverUrl,
+                                    authToken = authToken,
+                                    conversationId = if (isDirect) "direct_${directAgent.id}" else "boardroom-main",
+                                    parentMessageId = userMessage.id,
+                                    prompt = effectivePromptText,
+                                    targetBotIds = targetBotIds,
+                                    attachment = attachment
+                                )
+                            } finally {
+                                group.forEach { (agent, _) ->
+                                    clearAgentBusy(agent.id)
+                                    localState.update { st ->
+                                        st.copy(streamingDrafts = st.streamingDrafts - agent.id)
+                                    }
+                                }
+                            }
+
+                            batchResult.fold(
+                                onSuccess = { batch ->
+                                    group.map { (agent, _) ->
+                                        val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                                        val item = batch.items.firstOrNull { it.botId == remoteId }
+                                        val replyText = when {
+                                            item == null -> "**${agent.name} error:** Bridge returned no response."
+                                            !item.text.isNullOrBlank() -> item.text
+                                            item.status == "needs_auth" -> {
+                                                localState.update { st ->
+                                                    st.copy(
+                                                        remoteBridgeStatuses = st.remoteBridgeStatuses +
+                                                            (remoteId to AgentAvailabilityStatus.NEEDS_AUTH)
+                                                    )
+                                                }
+                                                "**${agent.name} needs authentication:** ${item.errorMessage ?: "Sign in required on Bridge host."}"
+                                            }
+                                            else -> {
+                                                val err = item.errorMessage ?: "Task ${item.status}"
+                                                localState.update { st ->
+                                                    st.copy(agentErrorDetails = st.agentErrorDetails + (agent.id to err))
+                                                }
+                                                "**${agent.name} error:** $err"
+                                            }
+                                        }
+                                        val msg = BoardroomMessage(
+                                            id = item?.responseMessageId ?: "msg-${UUID.randomUUID()}",
+                                            sender = agent.id,
+                                            role = agent.role.ifBlank { agent.provider.displayLabel },
+                                            senderName = agent.name,
+                                            avatar = agent.avatar,
+                                            colorHex = agent.colorHex,
+                                            text = replyText,
+                                            mode = modeName,
+                                            targetAgentId = rootTargetId,
+                                            rootTargetAgentId = rootTargetId,
+                                            rootMessageId = userMessage.id,
+                                            parentMessageId = userMessage.id,
+                                            deliveryTaskId = item?.deliveryTaskId,
+                                            dispatchBatchId = item?.dispatchBatchId ?: batch.dispatchBatchId,
+                                            hop = 1,
+                                            maxHops = maxHops,
+                                            isSupervisor = agent.isSupervisor,
+                                            collaborationRole = CollaborationRole.PRIMARY,
+                                            timestampMillis = System.currentTimeMillis()
+                                        )
+                                        repository.insertMessage(msg)
+                                        msg
+                                    }
+                                },
+                                onFailure = { err ->
+                                    val errText = err.localizedMessage ?: "Failed to reach Multi-Bot Bridge."
+                                    group.map { (agent, _) ->
+                                        localState.update { st ->
+                                            st.copy(agentErrorDetails = st.agentErrorDetails + (agent.id to errText))
+                                        }
+                                        val msg = BoardroomMessage(
+                                            id = "msg-${UUID.randomUUID()}",
+                                            sender = agent.id,
+                                            role = agent.role.ifBlank { agent.provider.displayLabel },
+                                            senderName = agent.name,
+                                            avatar = agent.avatar,
+                                            colorHex = agent.colorHex,
+                                            text = "**${agent.name} Bridge error:** $errText",
+                                            mode = modeName,
+                                            targetAgentId = rootTargetId,
+                                            rootTargetAgentId = rootTargetId,
+                                            rootMessageId = userMessage.id,
+                                            parentMessageId = userMessage.id,
+                                            hop = 1,
+                                            maxHops = maxHops,
+                                            isSupervisor = agent.isSupervisor,
+                                            collaborationRole = CollaborationRole.PRIMARY,
+                                            timestampMillis = System.currentTimeMillis()
+                                        )
+                                        repository.insertMessage(msg)
+                                        msg
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    localJobs.awaitAll() + bridgeJobs.awaitAll().flatten()
                 }
 
                 val allWorkerReplies = mutableListOf<BoardroomMessage>()
@@ -687,7 +1147,14 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
                                 )
                                 setAgentBusy(job.toAgent.id, "Handoff R$hop...")
                                 val replyText = try {
-                                    inferenceService.invokeAgent(job.toAgent, handoffPrompt, null)
+                                    inferenceService.invokeAgent(
+                                        agent = job.toAgent,
+                                        promptText = handoffPrompt,
+                                        attachment = null,
+                                        bridgeServerUrl = settings.bridgeServerUrl,
+                                        bridgeAuthToken = settings.bridgeAuthToken,
+                                        parentMessageId = userMessage.id
+                                    )
                                 } finally {
                                     clearAgentBusy(job.toAgent.id)
                                 }
@@ -740,7 +1207,14 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
                         )
                         setAgentBusy(supervisor.id, "Synthesizing...")
                         val synthesisText = try {
-                            inferenceService.invokeAgent(supervisor, synthesisPrompt, null)
+                            inferenceService.invokeAgent(
+                                agent = supervisor,
+                                promptText = synthesisPrompt,
+                                attachment = null,
+                                bridgeServerUrl = settings.bridgeServerUrl,
+                                bridgeAuthToken = settings.bridgeAuthToken,
+                                parentMessageId = userMessage.id
+                            )
                         } finally {
                             clearAgentBusy(supervisor.id)
                         }
@@ -838,8 +1312,14 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
             showMessage("Keep at least one agent in the boardroom.")
             return
         }
+        val targetAgent = agents.firstOrNull { it.id == agentId }
         viewModelScope.launch {
             browserCoordinator.closeSession(agentId)
+            if (targetAgent?.provider == AgentProvider.MUSE_BRIDGE) {
+                val remoteId = targetAgent.bridgeBotId.ifBlank { targetAgent.id }
+                repository.revokeTokensForBot(remoteId)
+                embeddedBridgeServer.revokeBotTokens(remoteId)
+            }
             if (uiState.value.settings.supervisorAgentId == agentId) {
                 repository.setSupervisor(null)
             }
@@ -934,11 +1414,509 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun toggleAgentEnabled(agentId: String, enabled: Boolean) {
+        val agent = uiState.value.agents.firstOrNull { it.id == agentId } ?: return
+        viewModelScope.launch {
+            repository.upsertAgent(agent.copy(enabled = enabled))
+            if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                val serverUrl = agent.customUrl.ifBlank { uiState.value.settings.bridgeServerUrl }
+                val token = agent.apiKey.ifBlank { uiState.value.settings.bridgeAuthToken }
+                val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                if (serverUrl.isNotBlank()) {
+                    inferenceService.bridgeClient.setBotEnabled(serverUrl, token, remoteId, enabled)
+                        .onSuccess { remote ->
+                            localState.update { st ->
+                                st.copy(remoteBridgeStatuses = st.remoteBridgeStatuses + (remote.botId to remote.status))
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    fun toggleAgentBroadcastSelected(agentId: String, selected: Boolean) {
+        val agent = uiState.value.agents.firstOrNull { it.id == agentId } ?: return
+        viewModelScope.launch {
+            repository.upsertAgent(agent.copy(selectedForBroadcast = selected))
+            if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                val serverUrl = agent.customUrl.ifBlank { uiState.value.settings.bridgeServerUrl }
+                val token = agent.apiKey.ifBlank { uiState.value.settings.bridgeAuthToken }
+                val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                if (serverUrl.isNotBlank()) {
+                    inferenceService.bridgeClient.setBotSelected(serverUrl, token, remoteId, selected)
+                }
+            }
+        }
+    }
+
+    fun setBotBroadcastEnabled(agentId: String, includeInBroadcast: Boolean) {
+        val agent = uiState.value.agents.firstOrNull { it.id == agentId } ?: return
+        val nextEnabled = if (includeInBroadcast) true else agent.enabled
+        val enabledChanged = nextEnabled != agent.enabled
+        viewModelScope.launch {
+            repository.upsertAgent(
+                agent.copy(
+                    enabled = nextEnabled,
+                    selectedForBroadcast = includeInBroadcast
+                )
+            )
+            if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                val serverUrl = agent.customUrl.ifBlank { uiState.value.settings.bridgeServerUrl }
+                val token = agent.apiKey.ifBlank { uiState.value.settings.bridgeAuthToken }
+                val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                if (serverUrl.isNotBlank()) {
+                    if (enabledChanged) {
+                        inferenceService.bridgeClient.setBotEnabled(serverUrl, token, remoteId, nextEnabled)
+                            .onSuccess { remote ->
+                                localState.update { st ->
+                                    st.copy(remoteBridgeStatuses = st.remoteBridgeStatuses + (remote.botId to remote.status))
+                                }
+                            }
+                    }
+                    inferenceService.bridgeClient.setBotSelected(serverUrl, token, remoteId, includeInBroadcast)
+                }
+            }
+        }
+    }
+
+    fun setAllBotsBroadcastEnabled(includeInBroadcast: Boolean) {
+        val currentAgents = uiState.value.agents
+        if (currentAgents.isEmpty()) return
+        val settings = uiState.value.settings
+        viewModelScope.launch {
+            currentAgents.forEach { agent ->
+                val nextEnabled = if (includeInBroadcast) true else agent.enabled
+                val enabledChanged = nextEnabled != agent.enabled
+                repository.upsertAgent(
+                    agent.copy(
+                        enabled = nextEnabled,
+                        selectedForBroadcast = includeInBroadcast
+                    )
+                )
+                if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                    val serverUrl = agent.customUrl.ifBlank { settings.bridgeServerUrl }
+                    val token = agent.apiKey.ifBlank { settings.bridgeAuthToken }
+                    val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+                    if (serverUrl.isNotBlank()) {
+                        if (enabledChanged) {
+                            inferenceService.bridgeClient.setBotEnabled(serverUrl, token, remoteId, nextEnabled)
+                        }
+                        inferenceService.bridgeClient.setBotSelected(serverUrl, token, remoteId, includeInBroadcast)
+                    }
+                }
+            }
+            showMessage(
+                if (includeInBroadcast) "All bots enabled for broadcast." else "All bots excluded from broadcast."
+            )
+        }
+    }
+
+    fun syncConfiguredBridge() {
+        val settings = uiState.value.settings
+        if (settings.bridgeServerUrl.isBlank()) {
+            showMessage("Set the Multi-Bot Bridge URL in Manage Agents first.")
+            return
+        }
+        syncBridgeBots(settings.bridgeServerUrl, settings.bridgeAuthToken)
+    }
+
+    fun syncBridgeBots(serverUrl: String, authToken: String) {
+        val normalized = MultiBotBridgeClient.normalizeBaseUrl(serverUrl)
+        viewModelScope.launch {
+            localState.update { it.copy(isSyncingBridge = true, bridgeSyncResult = null) }
+            val currentSettings = uiState.value.settings
+            repository.saveSettings(
+                currentSettings.copy(
+                    bridgeServerUrl = normalized,
+                    bridgeAuthToken = authToken.trim()
+                )
+            )
+
+            val trimmedToken = authToken.trim()
+            if (trimmedToken.isNotBlank()) {
+                repository.saveEncryptedAuthToken(
+                    botId = "bridge-sync",
+                    serverUrl = normalized,
+                    rawToken = trimmedToken
+                )
+            }
+
+            val result = inferenceService.bridgeClient.testAndFetchBots(normalized, trimmedToken)
+            result.onSuccess { sync ->
+                val existingAgents = uiState.value.agents
+                val statusUpdates = mutableMapOf<String, AgentAvailabilityStatus>()
+                sync.bots.forEachIndexed { idx, remote ->
+                    statusUpdates[remote.botId] = remote.status
+                    if (trimmedToken.isNotBlank()) {
+                        repository.saveEncryptedAuthToken(
+                            botId = remote.botId,
+                            serverUrl = normalized,
+                            rawToken = trimmedToken
+                        )
+                    }
+                    val match = existingAgents.firstOrNull {
+                        it.provider == AgentProvider.MUSE_BRIDGE &&
+                            (it.bridgeBotId == remote.botId || it.id == "bridge-${remote.botId}")
+                    }
+                    val colorPalette = listOf("#3B82F6", "#10B981", "#8B5CF6", "#F59E0B", "#EC4899")
+                    val upserted = (match ?: AgentConfig(
+                        id = "bridge-${remote.botId}",
+                        name = remote.displayName,
+                        role = "Bridge (${remote.provider})",
+                        avatar = remote.displayName.take(2).uppercase(),
+                        colorHex = colorPalette[idx % colorPalette.size],
+                        provider = AgentProvider.MUSE_BRIDGE,
+                        sortOrder = existingAgents.size + idx
+                    )).copy(
+                        name = remote.displayName,
+                        role = "Bridge · ${remote.provider}",
+                        provider = AgentProvider.MUSE_BRIDGE,
+                        customUrl = normalized,
+                        apiKey = trimmedToken,
+                        bridgeBotId = remote.botId,
+                        enabled = remote.enabled,
+                        selectedForBroadcast = remote.selectedForBroadcast
+                    )
+                    repository.upsertAgent(upserted)
+                }
+
+                bridgeSocketService.connect(normalized, trimmedToken)
+
+                localState.update { st ->
+                    st.copy(
+                        isSyncingBridge = false,
+                        remoteBridgeStatuses = st.remoteBridgeStatuses + statusUpdates,
+                        bridgeSyncResult = if (sync.bots.isEmpty()) {
+                            "Connected (${sync.providers.joinToString(", ")}). No bots registered on server yet."
+                        } else {
+                            "Connected · Synced ${sync.bots.size} bot(s) (${sync.providers.joinToString(", ")})"
+                        }
+                    )
+                }
+                showMessage("Multi-Bot Bridge synced (${sync.bots.size} bots).")
+            }.onFailure { err ->
+                localState.update { st ->
+                    st.copy(
+                        isSyncingBridge = false,
+                        bridgeSyncResult = "Failed: ${err.localizedMessage ?: "Unable to reach Bridge server"}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun initBridgeBotSession(agentId: String) {
+        val agent = uiState.value.agents.firstOrNull { it.id == agentId } ?: return
+        val serverUrl = agent.customUrl.ifBlank { uiState.value.settings.bridgeServerUrl }
+        val token = agent.apiKey.ifBlank { uiState.value.settings.bridgeAuthToken }
+        val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+        if (serverUrl.isBlank()) {
+            showMessage("Set the Multi-Bot Bridge Server URL in Manage Agents first.")
+            return
+        }
+        viewModelScope.launch {
+            setAgentBusy(agentId, "Connecting...")
+            val res = try {
+                inferenceService.bridgeClient.initBotSession(serverUrl, token, remoteId)
+            } finally {
+                clearAgentBusy(agentId)
+            }
+            res.onSuccess { (status, message) ->
+                localState.update { st ->
+                    st.copy(
+                        remoteBridgeStatuses = st.remoteBridgeStatuses + (remoteId to status),
+                        agentErrorDetails = if (status == AgentAvailabilityStatus.ERROR) {
+                            st.agentErrorDetails + (agentId to message)
+                        } else {
+                            st.agentErrorDetails - agentId
+                        }
+                    )
+                }
+                showMessage("${agent.name}: $message")
+            }.onFailure { err ->
+                val msg = err.localizedMessage ?: "Failed to initialize bot session."
+                localState.update { st ->
+                    st.copy(agentErrorDetails = st.agentErrorDetails + (agentId to msg))
+                }
+                showMessage("${agent.name}: $msg")
+            }
+        }
+    }
+
+    fun createBotAndBridge(
+        displayName: String = "",
+        targetUrl: String = "https://muse.ai"
+    ) {
+        if (localState.value.isCreatingBridgeBot) return
+        viewModelScope.launch {
+            localState.update { it.copy(isCreatingBridgeBot = true) }
+            try {
+                val srvStatus = withContext(Dispatchers.IO) {
+                    embeddedBridgeServer.ensureStarted()
+                }
+                val existingAgents = uiState.value.agents
+                val bridgeCount = existingAgents.count { it.provider == AgentProvider.MUSE_BRIDGE } + 1
+                val resolvedName = displayName.trim().ifBlank {
+                    "Muse Bot ${String.format("%02d", bridgeCount)}"
+                }
+                val normalizedTarget = AgentInferenceService.normalizeHttpUrl(targetUrl.ifBlank { "https://muse.ai" })
+                val existingToken = uiState.value.settings.bridgeAuthToken.trim()
+                    .ifBlank { embeddedBridgeServer.getPrimaryToken().orEmpty() }
+
+                val createRes = inferenceService.bridgeClient.createBotAndToken(
+                    serverUrl = srvStatus.baseUrl,
+                    authToken = existingToken,
+                    displayName = resolvedName,
+                    provider = "muse-web",
+                    targetUrl = normalizedTarget
+                )
+
+                createRes.onSuccess { created ->
+                    repository.saveEncryptedAuthToken(
+                        botId = created.bot.botId,
+                        serverUrl = created.serverUrl,
+                        rawToken = created.token
+                    )
+                    embeddedBridgeServer.registerExternalToken(created.bot.botId, created.token)
+
+                    val palette = listOf("#10B981", "#3B82F6", "#8B5CF6", "#F59E0B", "#EC4899")
+                    val colorHex = palette[(bridgeCount - 1) % palette.size]
+                    val localId = "bridge-${created.bot.botId}"
+                    val newAgent = AgentConfig(
+                        id = localId,
+                        name = created.bot.displayName,
+                        role = "Muse Bridge (${InAppBrowserCoordinator.hostOf(normalizedTarget).ifBlank { "muse.ai" }})",
+                        avatar = "M$bridgeCount",
+                        colorHex = colorHex,
+                        provider = AgentProvider.MUSE_BRIDGE,
+                        customUrl = created.serverUrl,
+                        apiKey = created.token,
+                        endpoint = normalizedTarget,
+                        bridgeBotId = created.bot.botId,
+                        enabled = true,
+                        selectedForBroadcast = true,
+                        sortOrder = existingAgents.size + 1
+                    )
+                    repository.upsertAgent(newAgent)
+
+                    val currentSettings = uiState.value.settings
+                    repository.saveSettings(
+                        currentSettings.copy(
+                            bridgeServerUrl = created.serverUrl,
+                            bridgeAuthToken = created.token
+                        )
+                    )
+
+                    bridgeSocketService.connect(created.serverUrl, created.token)
+
+                    localState.update { st ->
+                        st.copy(
+                            remoteBridgeStatuses = st.remoteBridgeStatuses + (created.bot.botId to created.bot.status),
+                            createdBridgeCredentials = CreatedBridgeCredentials(
+                                agentId = localId,
+                                botId = created.bot.botId,
+                                botName = created.bot.displayName,
+                                serverUrl = created.serverUrl,
+                                token = created.token,
+                                targetUrl = normalizedTarget
+                            )
+                        )
+                    }
+                    showMessage("${created.bot.displayName} connected & encrypted token stored.")
+                }.onFailure { err ->
+                    showMessage(err.localizedMessage ?: "Failed to create Bridge bot.")
+                }
+            } finally {
+                localState.update { it.copy(isCreatingBridgeBot = false) }
+            }
+        }
+    }
+
+    fun showBotTokenCredentials(agentId: String) {
+        val agent = uiState.value.agents.firstOrNull { it.id == agentId } ?: return
+        val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+        val serverUrl = agent.customUrl.ifBlank {
+            uiState.value.embeddedBridgeUrl.ifBlank { uiState.value.settings.bridgeServerUrl }
+        }
+        viewModelScope.launch {
+            val decryptedVaultToken = repository.getDecryptedTokenForBot(remoteId).orEmpty()
+            val token = decryptedVaultToken
+                .ifBlank { agent.apiKey }
+                .ifBlank { uiState.value.settings.bridgeAuthToken }
+                .ifBlank { embeddedBridgeServer.getPrimaryToken().orEmpty() }
+            localState.update {
+                it.copy(
+                    createdBridgeCredentials = CreatedBridgeCredentials(
+                        agentId = agent.id,
+                        botId = remoteId,
+                        botName = agent.name,
+                        serverUrl = serverUrl,
+                        token = token,
+                        targetUrl = agent.endpoint.ifBlank { "https://muse.ai" }
+                    )
+                )
+            }
+        }
+    }
+
+    fun dismissBridgeTokenDialog() {
+        localState.update { it.copy(createdBridgeCredentials = null) }
+    }
+
+    fun regenerateBotToken(agentId: String) {
+        val agent = uiState.value.agents.firstOrNull { it.id == agentId } ?: return
+        val remoteId = agent.bridgeBotId.ifBlank { agent.id }
+        viewModelScope.launch {
+            val srv = withContext(Dispatchers.IO) {
+                embeddedBridgeServer.ensureStarted()
+            }
+            val newToken = embeddedBridgeServer.rotateTokenForBot(remoteId)
+            val serverUrl = agent.customUrl.ifBlank { srv.baseUrl }
+            repository.saveEncryptedAuthToken(
+                botId = remoteId,
+                serverUrl = serverUrl,
+                rawToken = newToken
+            )
+            val updatedAgent = agent.copy(
+                customUrl = serverUrl,
+                apiKey = newToken
+            )
+            repository.upsertAgent(updatedAgent)
+            val currentSettings = uiState.value.settings
+            if (currentSettings.bridgeServerUrl.isBlank() || currentSettings.bridgeServerUrl == srv.baseUrl) {
+                repository.saveSettings(
+                    currentSettings.copy(
+                        bridgeServerUrl = srv.baseUrl,
+                        bridgeAuthToken = newToken
+                    )
+                )
+            }
+            bridgeSocketService.connect(serverUrl, newToken)
+            localState.update { st ->
+                st.copy(
+                    createdBridgeCredentials = CreatedBridgeCredentials(
+                        agentId = agent.id,
+                        botId = remoteId,
+                        botName = agent.name,
+                        serverUrl = updatedAgent.customUrl,
+                        token = newToken,
+                        targetUrl = agent.endpoint.ifBlank { "https://muse.ai" }
+                    )
+                )
+            }
+            showMessage("Generated & encrypted fresh Muse AI Bridge token for ${agent.name}.")
+        }
+    }
+
+    fun toggleEmbeddedBridgeServer(start: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (start) {
+                val srv = embeddedBridgeServer.ensureStarted()
+                withContext(Dispatchers.Main) {
+                    showMessage("In-app Bridge Server running at ${srv.baseUrl}")
+                }
+            } else {
+                embeddedBridgeServer.stop()
+                withContext(Dispatchers.Main) {
+                    showMessage("In-app Bridge Server stopped.")
+                }
+            }
+        }
+    }
+
+    fun refreshMuseConnection() {
+        if (localState.value.isRefreshingMuseConnection) return
+        viewModelScope.launch {
+            localState.update { it.copy(isRefreshingMuseConnection = true) }
+            try {
+                val activePairs = withContext(Dispatchers.IO) {
+                    repository.getDecryptedActiveTokens()
+                }
+                embeddedBridgeServer.restoreValidTokens(activePairs)
+                val srvStatus = withContext(Dispatchers.IO) {
+                    embeddedBridgeServer.ensureStarted()
+                }
+                val settings = uiState.value.settings
+                val bridgeUrl = settings.bridgeServerUrl.trim().ifBlank { srvStatus.baseUrl }
+                val primaryToken = settings.bridgeAuthToken.trim()
+                    .ifBlank { activePairs.firstOrNull()?.first.orEmpty() }
+                    .ifBlank { embeddedBridgeServer.getPrimaryToken().orEmpty() }
+
+                if (primaryToken.isNotBlank()) {
+                    withContext(Dispatchers.IO) {
+                        repository.touchAuthTokenUsed(primaryToken)
+                    }
+                }
+
+                // Refresh browser sessions for any Muse-targeting agents
+                val agents = uiState.value.agents
+                val museAgents = agents.filter { agent ->
+                    agent.id.equals("muse", ignoreCase = true) ||
+                        agent.provider == AgentProvider.MUSE_BRIDGE ||
+                        agent.customUrl.contains("muse.ai", ignoreCase = true) ||
+                        agent.endpoint.contains("muse.ai", ignoreCase = true)
+                }
+                for (agent in museAgents) {
+                    val existingBrowserStatus = browserCoordinator.statuses.value[agent.id]
+                    if (existingBrowserStatus?.open == true || existingBrowserStatus?.hasSavedProfile == true) {
+                        val refreshed = browserCoordinator.refreshStatus(agent)
+                        if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                            embeddedBridgeServer.markBotBrowserReady(
+                                botId = agent.bridgeBotId.ifBlank { agent.id },
+                                ready = refreshed.ready || refreshed.hasSavedProfile,
+                                needsLogin = refreshed.needsLogin && !refreshed.ready
+                            )
+                        }
+                    }
+                    if (agent.provider == AgentProvider.MUSE_BRIDGE && bridgeUrl.isNotBlank()) {
+                        val botId = agent.bridgeBotId.ifBlank { agent.id }
+                        val botToken = agent.apiKey.ifBlank { primaryToken }
+                        inferenceService.bridgeClient.initBotSession(bridgeUrl, botToken, botId)
+                            .onSuccess { (status, message) ->
+                                localState.update { st ->
+                                    st.copy(
+                                        remoteBridgeStatuses = st.remoteBridgeStatuses + (botId to status),
+                                        agentErrorDetails = if (status == AgentAvailabilityStatus.ERROR) {
+                                            st.agentErrorDetails + (agent.id to message)
+                                        } else {
+                                            st.agentErrorDetails - agent.id
+                                        }
+                                    )
+                                }
+                            }
+                    }
+                }
+
+                val sentPing = bridgeSocketService.refreshMuseConnection()
+                if (!sentPing && bridgeUrl.isNotBlank()) {
+                    bridgeSocketService.connect(bridgeUrl, primaryToken)
+                }
+
+                localState.update {
+                    it.copy(lastMuseRefreshMillis = System.currentTimeMillis())
+                }
+                val connectedNow = uiState.value.museConnectionStatus.isConnected
+                showMessage(
+                    if (connectedNow) {
+                        "Muse AI connection verified."
+                    } else {
+                        "Muse AI is disconnected. Sign in via Browser or create a Bridge bot."
+                    }
+                )
+            } finally {
+                localState.update { it.copy(isRefreshingMuseConnection = false) }
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         sendJob?.cancel()
+        sseJob?.cancel()
         recordingTimerJob?.cancel()
         releaseRecorder(deleteFile = true)
+        bridgeSocketService.disconnect()
+        embeddedBridgeServer.stop()
         networkCallback?.let { cb ->
             try {
                 val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -960,6 +1938,9 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
         val isSending: Boolean = false,
         val thinkingStatus: String? = null,
         val busyAgentDetails: Map<String, String> = emptyMap(),
+        val remoteBridgeStatuses: Map<String, AgentAvailabilityStatus> = emptyMap(),
+        val agentErrorDetails: Map<String, String> = emptyMap(),
+        val streamingDrafts: Map<String, String> = emptyMap(),
         val isNetworkAvailable: Boolean = true,
         val isRecordingVoice: Boolean = false,
         val recordingSeconds: Int = 0,
@@ -968,8 +1949,20 @@ class BoardroomViewModel(application: Application) : AndroidViewModel(applicatio
         val manageSelectedAgentId: String? = null,
         val showInAppBrowserDialog: Boolean = false,
         val activeBrowserAgentId: String? = null,
+        val showBotsScreen: Boolean = false,
         val webhookTestResult: String? = null,
         val isTestingWebhook: Boolean = false,
+        val bridgeSyncResult: String? = null,
+        val isSyncingBridge: Boolean = false,
+        val bridgeSseConnected: Boolean = false,
+        val embeddedBridgeRunning: Boolean = false,
+        val embeddedBridgeUrl: String = "",
+        val isCreatingBridgeBot: Boolean = false,
+        val createdBridgeCredentials: CreatedBridgeCredentials? = null,
+        val socketState: BridgeSocketState = BridgeSocketState(),
+        val storedAuthTokenCount: Int = 0,
+        val isRefreshingMuseConnection: Boolean = false,
+        val lastMuseRefreshMillis: Long = 0L,
         val snackbarMessage: String? = null
     )
 

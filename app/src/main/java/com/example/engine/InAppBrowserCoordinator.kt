@@ -9,6 +9,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.example.data.model.AgentConfig
+import com.example.data.model.AgentProvider
 import com.example.data.model.AttachmentData
 import com.example.data.model.InAppBrowserStatus
 import kotlinx.coroutines.CompletableDeferred
@@ -43,7 +44,7 @@ class InAppBrowserCoordinator(private val context: Context) {
                         agentId = agent.id,
                         open = sessions.containsKey(agent.id),
                         hasSavedProfile = hasSaved,
-                        currentUrl = AgentInferenceService.normalizeHttpUrl(agent.customUrl)
+                        currentUrl = effectiveBrowserUrl(agent)
                     )
             }
             next
@@ -55,7 +56,7 @@ class InAppBrowserCoordinator(private val context: Context) {
         withContext(Dispatchers.Main) {
             val existing = sessions[agent.id]
             val targetUrl = AgentInferenceService.normalizeHttpUrl(
-                forceUrl?.takeIf { it.isNotBlank() } ?: agent.customUrl.ifBlank { "https://muse.ai" }
+                forceUrl?.takeIf { it.isNotBlank() } ?: effectiveBrowserUrl(agent)
             )
 
             if (existing != null) {
@@ -193,8 +194,9 @@ class InAppBrowserCoordinator(private val context: Context) {
     ): String = promptMutex.withLock {
         val currentStatus = _statuses.value[agent.id]
         val hasSaved = prefs.getBoolean(savedKey(agent.id), false)
-        if (currentStatus?.open != true && !hasSaved && isKnownAuthAiUrl(agent.customUrl)) {
-            return@withLock "**${agent.name} is not signed in yet.** Tap the globe icon on **${agent.name}** to sign in inside the In-App Browser once—after that your session stays connected."
+        val browserTargetUrl = effectiveBrowserUrl(agent)
+        if (currentStatus?.open != true && !hasSaved && isKnownAuthAiUrl(browserTargetUrl)) {
+            return@withLock "**${agent.name} is not signed in yet.** Tap **Connect Muse AI** on **${agent.name}** to sign in inside the In-App Browser once—after that your session stays connected."
         }
 
         val effectivePrompt = if (attachment != null) {
@@ -336,6 +338,15 @@ class InAppBrowserCoordinator(private val context: Context) {
     private fun savedKey(agentId: String) = "saved_session_$agentId"
 
     companion object {
+        fun effectiveBrowserUrl(agent: AgentConfig): String {
+            val raw = if (agent.provider == AgentProvider.MUSE_BRIDGE) {
+                agent.endpoint.ifBlank { "https://muse.ai" }
+            } else {
+                agent.customUrl.ifBlank { "https://muse.ai" }
+            }
+            return AgentInferenceService.normalizeHttpUrl(raw)
+        }
+
         fun hostOf(rawUrl: String): String {
             return try {
                 Uri.parse(AgentInferenceService.normalizeHttpUrl(rawUrl)).host.orEmpty()

@@ -26,9 +26,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -92,6 +94,8 @@ fun ManageAgentsDialog(
     settings: BoardroomSettings,
     webhookTestResult: String?,
     isTestingWebhook: Boolean,
+    bridgeSyncResult: String? = null,
+    isSyncingBridge: Boolean = false,
     onSelectAgent: (String) -> Unit,
     onAddAgent: () -> Unit,
     onDuplicateAgent: (AgentConfig) -> Unit,
@@ -100,6 +104,8 @@ fun ManageAgentsDialog(
     onSaveCollaboration: (Boolean, Int) -> Unit,
     onOpenBrowserForAgent: (String) -> Unit,
     onTestWebhook: (String) -> Unit,
+    onSyncBridgeBots: (String, String) -> Unit = { _, _ -> },
+    onInitBridgeBot: (String) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val activeAgent = agents.firstOrNull { it.id == selectedAgentId } ?: agents.firstOrNull()
@@ -114,6 +120,21 @@ fun ManageAgentsDialog(
     var apiKey by remember(activeAgent?.id) { mutableStateOf(activeAgent?.apiKey.orEmpty()) }
     var endpoint by remember(activeAgent?.id) { mutableStateOf(activeAgent?.endpoint.orEmpty()) }
     var systemPrompt by remember(activeAgent?.id) { mutableStateOf(activeAgent?.systemPrompt.orEmpty()) }
+    var bridgeBotId by remember(activeAgent?.id) { mutableStateOf(activeAgent?.bridgeBotId.orEmpty()) }
+    var botEnabled by remember(activeAgent?.id) { mutableStateOf(activeAgent?.enabled ?: true) }
+    var selectedForBroadcast by remember(activeAgent?.id) { mutableStateOf(activeAgent?.selectedForBroadcast ?: true) }
+    var bridgeUrlInput by remember(settings.bridgeServerUrl, activeAgent?.id) {
+        mutableStateOf(
+            activeAgent?.takeIf { it.provider == AgentProvider.MUSE_BRIDGE }?.customUrl?.takeIf { it.isNotBlank() }
+                ?: settings.bridgeServerUrl
+        )
+    }
+    var bridgeTokenInput by remember(settings.bridgeAuthToken, activeAgent?.id) {
+        mutableStateOf(
+            activeAgent?.takeIf { it.provider == AgentProvider.MUSE_BRIDGE }?.apiKey?.takeIf { it.isNotBlank() }
+                ?: settings.bridgeAuthToken
+        )
+    }
     var isSupervisor by remember(activeAgent?.id, settings.supervisorAgentId) {
         mutableStateOf(
             activeAgent != null &&
@@ -141,6 +162,9 @@ fun ManageAgentsDialog(
             apiKey = activeAgent.apiKey
             endpoint = activeAgent.endpoint
             systemPrompt = activeAgent.systemPrompt
+            bridgeBotId = activeAgent.bridgeBotId
+            botEnabled = activeAgent.enabled
+            selectedForBroadcast = activeAgent.selectedForBroadcast
             isSupervisor = activeAgent.isSupervisor || settings.supervisorAgentId == activeAgent.id
         }
     }
@@ -416,8 +440,128 @@ fun ManageAgentsDialog(
                             }
                         }
 
+                        // Bot Availability & Broadcast Selection Controls
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = BgElevated,
+                            border = BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable { botEnabled = !botEnabled }
+                                ) {
+                                    Checkbox(
+                                        checked = botEnabled,
+                                        onCheckedChange = { botEnabled = it },
+                                        colors = CheckboxDefaults.colors(checkedColor = AmberAccent)
+                                    )
+                                    Text("Bot Enabled", style = MaterialTheme.typography.bodySmall, color = TextPrimary)
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable { selectedForBroadcast = !selectedForBroadcast }
+                                ) {
+                                    Checkbox(
+                                        checked = selectedForBroadcast,
+                                        onCheckedChange = { selectedForBroadcast = it },
+                                        colors = CheckboxDefaults.colors(checkedColor = AmberAccent)
+                                    )
+                                    Text("Include in Broadcast", style = MaterialTheme.typography.bodySmall, color = TextPrimary)
+                                }
+                            }
+                        }
+
                         // Provider-Specific Fields
                         when (provider) {
+                            AgentProvider.MUSE_BRIDGE -> {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = BgElevated,
+                                    border = BorderStroke(1.dp, BorderSubtle),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(Icons.Filled.Hub, contentDescription = null, tint = AmberAccent, modifier = Modifier.size(18.dp))
+                                            Text(
+                                                text = "Multi-Bot Bridge Connector",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = TextPrimary
+                                            )
+                                        }
+                                        BoardroomInputField(
+                                            label = "Bridge Server URL",
+                                            value = bridgeUrlInput,
+                                            onValueChange = {
+                                                bridgeUrlInput = it
+                                                customUrl = it
+                                            },
+                                            placeholder = "https://bridge.yourdomain.com"
+                                        )
+                                        BoardroomInputField(
+                                            label = "Optional Bridge Bearer Token",
+                                            value = bridgeTokenInput,
+                                            onValueChange = {
+                                                bridgeTokenInput = it
+                                                apiKey = it
+                                            },
+                                            placeholder = "Leave blank if unsecured internal host",
+                                            isPassword = true
+                                        )
+                                        BoardroomInputField(
+                                            label = "Remote Bot ID",
+                                            value = bridgeBotId,
+                                            onValueChange = { bridgeBotId = it },
+                                            placeholder = "bot-01"
+                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = { onSyncBridgeBots(bridgeUrlInput, bridgeTokenInput) },
+                                                enabled = !isSyncingBridge,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("sync_bridge_button")
+                                            ) {
+                                                Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.size(16.dp), tint = AmberAccent)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(if (isSyncingBridge) "Syncing..." else "Connect & Sync", color = AmberAccent)
+                                            }
+                                            OutlinedButton(
+                                                onClick = { onInitBridgeBot(activeAgent.id) },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("init_bridge_bot_button")
+                                            ) {
+                                                Text("Init Session")
+                                            }
+                                        }
+                                        if (!bridgeSyncResult.isNullOrBlank()) {
+                                            Text(
+                                                text = bridgeSyncResult,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (bridgeSyncResult.startsWith("Connected")) StatusOk else StatusErr
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             AgentProvider.INAPP_BROWSER -> {
                                 Text(
                                     text = "Quick AI Presets",
@@ -621,6 +765,16 @@ fun ManageAgentsDialog(
 
                         Button(
                             onClick = {
+                                val resolvedUrl = if (provider == AgentProvider.MUSE_BRIDGE) {
+                                    bridgeUrlInput.trim().ifBlank { customUrl.trim() }
+                                } else {
+                                    customUrl.trim()
+                                }
+                                val resolvedKey = if (provider == AgentProvider.MUSE_BRIDGE) {
+                                    bridgeTokenInput.trim().ifBlank { apiKey.trim() }
+                                } else {
+                                    apiKey.trim()
+                                }
                                 onSaveAgent(
                                     activeAgent.copy(
                                         name = name.trim().ifBlank { activeAgent.name },
@@ -630,12 +784,15 @@ fun ManageAgentsDialog(
                                         },
                                         colorHex = colorHex,
                                         provider = provider,
-                                        customUrl = customUrl.trim(),
+                                        customUrl = resolvedUrl,
                                         model = model.trim(),
-                                        apiKey = apiKey.trim(),
+                                        apiKey = resolvedKey,
                                         endpoint = endpoint.trim(),
                                         systemPrompt = systemPrompt.trim(),
-                                        isSupervisor = isSupervisor
+                                        isSupervisor = isSupervisor,
+                                        enabled = botEnabled,
+                                        selectedForBroadcast = selectedForBroadcast,
+                                        bridgeBotId = bridgeBotId.trim()
                                     ),
                                     isSupervisor
                                 )

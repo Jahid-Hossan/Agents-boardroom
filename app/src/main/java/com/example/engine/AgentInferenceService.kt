@@ -29,7 +29,8 @@ private const val DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 
 class AgentInferenceService(
     private val context: Context,
-    private val browserCoordinator: InAppBrowserCoordinator
+    private val browserCoordinator: InAppBrowserCoordinator,
+    val bridgeClient: MultiBotBridgeClient = MultiBotBridgeClient()
 ) {
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -44,11 +45,23 @@ class AgentInferenceService(
     suspend fun invokeAgent(
         agent: AgentConfig,
         promptText: String,
-        attachment: AttachmentData? = null
+        attachment: AttachmentData? = null,
+        bridgeServerUrl: String = "",
+        bridgeAuthToken: String = "",
+        parentMessageId: String? = null
     ): String {
         return try {
-            withTimeout(60_000L) {
+            withTimeout(65_000L) {
                 when (agent.provider) {
+                    AgentProvider.MUSE_BRIDGE ->
+                        callMuseBridgeSingle(
+                            agent = agent,
+                            promptText = promptText,
+                            attachment = attachment,
+                            bridgeServerUrl = bridgeServerUrl,
+                            bridgeAuthToken = bridgeAuthToken,
+                            parentMessageId = parentMessageId
+                        )
                     AgentProvider.INAPP_BROWSER ->
                         browserCoordinator.sendPrompt(agent, promptText, attachment)
                     AgentProvider.GEMINI ->
@@ -70,6 +83,50 @@ class AgentInferenceService(
             Log.e(TAG, "${agent.name} failed", e)
             "**${agent.name} error:** ${e.localizedMessage ?: "Request failed."}"
         }
+    }
+
+    private suspend fun callMuseBridgeSingle(
+        agent: AgentConfig,
+        promptText: String,
+        attachment: AttachmentData?,
+        bridgeServerUrl: String,
+        bridgeAuthToken: String,
+        parentMessageId: String?
+    ): String {
+        val server = agent.customUrl.trim().ifBlank { bridgeServerUrl.trim() }
+        val token = agent.apiKey.trim().ifBlank { bridgeAuthToken.trim() }
+        val remoteBotId = agent.bridgeBotId.trim().ifBlank { agent.id }
+
+        if (server.isEmpty()) {
+            return "**${agent.name} Bridge not configured.** Open **Manage Agents** and set the Multi-Bot Bridge URL."
+        }
+
+        val result = bridgeClient.dispatchBroadcast(
+            serverUrl = server,
+            authToken = token,
+            conversationId = "boardroom-main",
+            parentMessageId = parentMessageId ?: "msg_${System.currentTimeMillis()}",
+            prompt = promptText,
+            targetBotIds = listOf(remoteBotId),
+            attachment = attachment
+        )
+
+        return result.fold(
+            onSuccess = { batch ->
+                val item = batch.items.firstOrNull { it.botId == remoteBotId } ?: batch.items.firstOrNull()
+                when {
+                    item == null -> "**${agent.name} error:** Bridge returned no delivery task."
+                    !item.text.isNullOrBlank() -> item.text
+                    item.status == "needs_auth" ->
+                        "**${agent.name} needs authentication:** ${item.errorMessage ?: "Sign in on the Bridge host for bot `$remoteBotId`."}"
+                    else ->
+                        "**${agent.name} error:** ${item.errorMessage ?: "Bot task ${item.status}."}"
+                }
+            },
+            onFailure = { err ->
+                "**${agent.name} Bridge error:** ${err.localizedMessage ?: "Failed to reach Multi-Bot Bridge."}"
+            }
+        )
     }
 
     private suspend fun callGemini(

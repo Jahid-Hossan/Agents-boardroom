@@ -118,6 +118,8 @@ fun ComposerBar(
 
         // Quick @mention strip in Boardroom mode
         if (viewMode == ChatViewMode.BOARDROOM && agents.isNotEmpty()) {
+            val enabledCount = agents.count { it.enabled }
+            val selectedCount = agents.count { it.enabled && it.selectedForBroadcast }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -126,8 +128,21 @@ fun ComposerBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = BgElevated,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderSubtle),
+                    modifier = Modifier.testTag("broadcast_target_count_chip")
+                ) {
+                    Text(
+                        text = "Targets: $selectedCount/$enabledCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
                 MentionChip(label = "@all", status = null, onClick = { onInsertMention("@all") })
-                agents.forEach { agent ->
+                agents.filter { it.enabled }.forEach { agent ->
                     MentionChip(
                         label = "@${agent.name}",
                         status = agentStatuses[agent.id] ?: AgentAvailabilityStatus.OFFLINE,

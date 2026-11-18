@@ -13,6 +13,7 @@ room = "2.8.4"
 kotlinxSerializationJson = "1.9.0"
 coroutines = "1.10.2"
 okhttp = "4.12.0"
+socketIo = "2.1.1"
 coil = "2.7.0"
 junit = "4.13.2"
 robolectric = "4.15.1"
@@ -49,6 +50,7 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+socket-io-client = { group = "io.socket", name = "socket.io-client", version.ref = "socketIo" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }

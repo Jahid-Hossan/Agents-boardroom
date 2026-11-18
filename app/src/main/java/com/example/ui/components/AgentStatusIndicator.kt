@@ -51,10 +51,18 @@ import com.example.ui.theme.StatusErr
 import com.example.ui.theme.StatusErrBorder
 import com.example.ui.theme.StatusErrSoft
 import com.example.ui.theme.StatusErrText
+import com.example.ui.theme.StatusOffline
+import com.example.ui.theme.StatusOfflineBorder
+import com.example.ui.theme.StatusOfflineSoft
 import com.example.ui.theme.StatusOk
+import com.example.ui.theme.StatusWarn
+import com.example.ui.theme.StatusWarnBorder
+import com.example.ui.theme.StatusWarnSoft
+import com.example.ui.theme.StatusWarnText
 import com.example.ui.theme.SupervisorAmberBg
 import com.example.ui.theme.SupervisorAmberBorder
 import com.example.ui.theme.TextPrimary
+import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.parseHexColor
 
 @Composable
@@ -63,7 +71,9 @@ fun agentStatusColors(status: AgentAvailabilityStatus): AgentStatusStyle {
         targetValue = when (status) {
             AgentAvailabilityStatus.ONLINE -> StatusOk
             AgentAvailabilityStatus.BUSY -> AmberAccent
-            AgentAvailabilityStatus.OFFLINE -> StatusErr
+            AgentAvailabilityStatus.NEEDS_AUTH -> StatusWarn
+            AgentAvailabilityStatus.ERROR -> StatusErr
+            AgentAvailabilityStatus.OFFLINE -> StatusOffline
         },
         animationSpec = spring(),
         label = "status_dot_color"
@@ -81,11 +91,23 @@ fun agentStatusColors(status: AgentAvailabilityStatus): AgentStatusStyle {
             containerColor = SupervisorAmberBg,
             borderColor = SupervisorAmberBorder
         )
-        AgentAvailabilityStatus.OFFLINE -> AgentStatusStyle(
+        AgentAvailabilityStatus.NEEDS_AUTH -> AgentStatusStyle(
+            dotColor = dotColor,
+            textColor = StatusWarnText,
+            containerColor = StatusWarnSoft,
+            borderColor = StatusWarnBorder
+        )
+        AgentAvailabilityStatus.ERROR -> AgentStatusStyle(
             dotColor = dotColor,
             textColor = StatusErrText,
             containerColor = StatusErrSoft,
             borderColor = StatusErrBorder
+        )
+        AgentAvailabilityStatus.OFFLINE -> AgentStatusStyle(
+            dotColor = dotColor,
+            textColor = TextSecondary,
+            containerColor = StatusOfflineSoft,
+            borderColor = StatusOfflineBorder
         )
     }
 }

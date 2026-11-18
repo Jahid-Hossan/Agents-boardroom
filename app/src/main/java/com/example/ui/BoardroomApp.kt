@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Tune
@@ -78,6 +79,8 @@ import com.example.data.model.ChatViewMode
 import com.example.ui.components.AgentSidebarContent
 import com.example.ui.components.ChatFeedSection
 import com.example.ui.components.ComposerBar
+import com.example.ui.screens.BotsScreen
+import com.example.ui.screens.BridgeTokenDialog
 import com.example.ui.screens.InAppBrowserDialog
 import com.example.ui.screens.ManageAgentsDialog
 import com.example.ui.theme.AmberAccent
@@ -158,6 +161,14 @@ fun BoardroomApp(
             browserStatuses = uiState.browserStatuses,
             agentStatuses = uiState.agentStatuses,
             busyDetails = uiState.busyAgentDetails,
+            agentErrorDetails = uiState.agentErrorDetails,
+            bridgeSseConnected = uiState.bridgeSseConnected,
+            embeddedBridgeRunning = uiState.embeddedBridgeRunning,
+            embeddedBridgeUrl = uiState.embeddedBridgeUrl,
+            isCreatingBridgeBot = uiState.isCreatingBridgeBot,
+            museConnectionStatus = uiState.museConnectionStatus,
+            storedAuthTokenCount = uiState.storedAuthTokenCount,
+            onRefreshMuseConnection = viewModel::refreshMuseConnection,
             viewMode = uiState.viewMode,
             selectedDirectAgentId = uiState.selectedDirectAgentId,
             onOpenBrowser = { agentId ->
@@ -179,6 +190,17 @@ fun BoardroomApp(
             },
             onDeleteAgent = { agent ->
                 agentPendingDelete = agent
+            },
+            onToggleEnabled = viewModel::toggleAgentEnabled,
+            onToggleBroadcastSelected = viewModel::toggleAgentBroadcastSelected,
+            onInitBridgeBot = viewModel::initBridgeBotSession,
+            onOpenBotsScreen = {
+                scope.launch { drawerState.close() }
+                viewModel.openBotsScreen()
+            },
+            onCreateBotBridge = {
+                scope.launch { drawerState.close() }
+                viewModel.createBotAndBridge()
             }
         )
     }
@@ -344,6 +366,20 @@ fun BoardroomApp(
                             }
                         }
 
+                        // Bots Screen button
+                        IconButton(
+                            onClick = { viewModel.openBotsScreen() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("open_bots_screen_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Hub,
+                                contentDescription = "Bots & Broadcast Stream",
+                                tint = AmberAccent
+                            )
+                        }
+
                         // Manage Agents button
                         IconButton(
                             onClick = { viewModel.openManageAgents() },
@@ -400,6 +436,7 @@ fun BoardroomApp(
                         agents = uiState.agents,
                         agentStatuses = uiState.agentStatuses,
                         busyDetails = uiState.busyAgentDetails,
+                        streamingDrafts = uiState.streamingDrafts,
                         messages = uiState.messages,
                         viewMode = uiState.viewMode,
                         directAgent = directAgent,
@@ -454,7 +491,45 @@ fun BoardroomApp(
         }
     }
 
-    if (isExpandedLayout) {
+    if (uiState.showBotsScreen) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            BotsScreen(
+                bots = uiState.agents,
+                agentStatuses = uiState.agentStatuses,
+                browserStatuses = uiState.browserStatuses,
+                busyDetails = uiState.busyAgentDetails,
+                errorDetails = uiState.agentErrorDetails,
+                settings = uiState.settings,
+                bridgeSseConnected = uiState.bridgeSseConnected,
+                isSyncingBridge = uiState.isSyncingBridge,
+                embeddedBridgeRunning = uiState.embeddedBridgeRunning,
+                embeddedBridgeUrl = uiState.embeddedBridgeUrl,
+                isCreatingBridgeBot = uiState.isCreatingBridgeBot,
+                museConnectionStatus = uiState.museConnectionStatus,
+                storedAuthTokenCount = uiState.storedAuthTokenCount,
+                onRefreshMuseConnection = viewModel::refreshMuseConnection,
+                onCreateBotBridge = { viewModel.createBotAndBridge() },
+                onShowBotToken = viewModel::showBotTokenCredentials,
+                onToggleEmbeddedServer = viewModel::toggleEmbeddedBridgeServer,
+                onToggleBroadcast = viewModel::setBotBroadcastEnabled,
+                onToggleBotEnabled = viewModel::toggleAgentEnabled,
+                onSetAllBroadcast = viewModel::setAllBotsBroadcastEnabled,
+                onSyncBridge = viewModel::syncConfiguredBridge,
+                onAddBot = {
+                    val created = viewModel.createNewAgent()
+                    viewModel.openManageAgents(created.id)
+                },
+                onEditBot = viewModel::openManageAgents,
+                onOpenBrowserForBot = viewModel::openInAppBrowser,
+                onInitBridgeBot = viewModel::initBridgeBotSession,
+                onBack = viewModel::closeBotsScreen
+            )
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    } else if (isExpandedLayout) {
         mainContent()
     } else {
         ModalNavigationDrawer(
@@ -479,6 +554,8 @@ fun BoardroomApp(
             settings = uiState.settings,
             webhookTestResult = uiState.webhookTestResult,
             isTestingWebhook = uiState.isTestingWebhook,
+            bridgeSyncResult = uiState.bridgeSyncResult,
+            isSyncingBridge = uiState.isSyncingBridge,
             onSelectAgent = viewModel::selectManageAgent,
             onAddAgent = { viewModel.createNewAgent() },
             onDuplicateAgent = { source -> viewModel.duplicateAgent(source) },
@@ -490,6 +567,8 @@ fun BoardroomApp(
                 viewModel.openInAppBrowser(id)
             },
             onTestWebhook = viewModel::testWebhookConnection,
+            onSyncBridgeBots = viewModel::syncBridgeBots,
+            onInitBridgeBot = viewModel::initBridgeBotSession,
             onDismiss = viewModel::closeManageAgents
         )
     }
@@ -553,6 +632,22 @@ fun BoardroomApp(
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    val bridgeCreds = uiState.createdBridgeCredentials
+    if (bridgeCreds != null) {
+        BridgeTokenDialog(
+            credentials = bridgeCreds,
+            onCopyToken = {
+                viewModel.showMessage("Copied Muse AI Bridge token to clipboard.")
+            },
+            onRegenerateToken = viewModel::regenerateBotToken,
+            onConnectMuseAi = { agentId ->
+                viewModel.dismissBridgeTokenDialog()
+                viewModel.openInAppBrowser(agentId, bridgeCreds.targetUrl)
+            },
+            onDismiss = viewModel::dismissBridgeTokenDialog
         )
     }
 }
